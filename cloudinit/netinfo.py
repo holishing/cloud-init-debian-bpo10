@@ -21,9 +21,12 @@
 #    along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 import cloudinit.util as util
+from cloudinit.log import logging
 import re
 
 from prettytable import PrettyTable
+
+LOG = logging.getLogger()
 
 
 def netdev_info(empty=""):
@@ -56,8 +59,8 @@ def netdev_info(empty=""):
             # newer (freebsd and fedora) show 'inet xx.yy'
             # just skip this 'inet' entry. (LP: #1285185)
             try:
-                if (toks[i] in ("inet", "inet6") and
-                    toks[i + 1].startswith("addr:")):
+                if ((toks[i] in ("inet", "inet6") and
+                     toks[i + 1].startswith("addr:"))):
                     continue
             except IndexError:
                 pass
@@ -168,8 +171,9 @@ def route_pformat():
     lines = []
     try:
         routes = route_info()
-    except Exception:
+    except Exception as e:
         lines.append(util.center('Route info failed', '!', 80))
+        util.logexc(LOG, "Route info failed: %s" % e)
         routes = None
     if routes is not None:
         fields = ['Route', 'Destination', 'Gateway',

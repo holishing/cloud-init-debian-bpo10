@@ -1,4 +1,4 @@
-from tests.unittests import helpers
+from . import helpers
 
 from cloudinit.handlers import cloud_config
 from cloudinit.handlers import (CONTENT_START, CONTENT_END)
@@ -11,7 +11,7 @@ import glob
 import os
 import random
 import re
-import string  # pylint: disable=W0402
+import string
 
 SOURCE_PAT = "source*.*yaml"
 EXPECTED_PAT = "expected%s.yaml"

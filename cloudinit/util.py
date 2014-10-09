@@ -19,8 +19,6 @@
 #
 #    You should have received a copy of the GNU General Public License
 #    along with this program.  If not, see <http://www.gnu.org/licenses/>.
-#
-# pylint: disable=C0302
 
 from StringIO import StringIO
 
@@ -42,7 +40,7 @@ import re
 import shutil
 import socket
 import stat
-import string  # pylint: disable=W0402
+import string
 import subprocess
 import sys
 import tempfile
@@ -146,23 +144,23 @@ class SeLinuxGuard(object):
             return False
 
     def __exit__(self, excp_type, excp_value, excp_traceback):
-        if self.selinux and self.selinux.is_selinux_enabled():
-            path = os.path.realpath(os.path.expanduser(self.path))
-            # path should be a string, not unicode
-            path = str(path)
-            do_restore = False
-            try:
-                # See if even worth restoring??
-                stats = os.lstat(path)
-                if stat.ST_MODE in stats:
-                    self.selinux.matchpathcon(path, stats[stat.ST_MODE])
-                    do_restore = True
-            except OSError:
-                pass
-            if do_restore:
-                LOG.debug("Restoring selinux mode for %s (recursive=%s)",
-                          path, self.recursive)
-                self.selinux.restorecon(path, recursive=self.recursive)
+        if not self.selinux or not self.selinux.is_selinux_enabled():
+            return
+        if not os.path.lexists(self.path):
+            return
+
+        path = os.path.realpath(self.path)
+        # path should be a string, not unicode
+        path = str(path)
+        try:
+            stats = os.lstat(path)
+            self.selinux.matchpathcon(path, stats[stat.ST_MODE])
+        except OSError:
+            return
+
+        LOG.debug("Restoring selinux mode for %s (recursive=%s)",
+                  path, self.recursive)
+        self.selinux.restorecon(path, recursive=self.recursive)
 
 
 class MountFailedError(Exception):
@@ -193,16 +191,16 @@ def ExtendedTemporaryFile(**kwargs):
     return fh
 
 
-def fork_cb(child_cb, *args):
+def fork_cb(child_cb, *args, **kwargs):
     fid = os.fork()
     if fid == 0:
         try:
-            child_cb(*args)
-            os._exit(0)  # pylint: disable=W0212
+            child_cb(*args, **kwargs)
+            os._exit(0)
         except:
             logexc(LOG, "Failed forking and calling callback %s",
                    type_utils.obj_name(child_cb))
-            os._exit(1)  # pylint: disable=W0212
+            os._exit(1)
     else:
         LOG.debug("Forked child %s who will run callback %s",
                   fid, type_utils.obj_name(child_cb))
@@ -423,7 +421,7 @@ def get_cfg_option_list(yobj, key, default=None):
     @return: The configuration option as a list of strings or default if key
         is not found.
     """
-    if not key in yobj:
+    if key not in yobj:
         return default
     if yobj[key] is None:
         return []
@@ -487,7 +485,7 @@ def redirect_output(outfmt, errfmt, o_out=None, o_err=None):
             new_fp = open(arg, owith)
         elif mode == "|":
             proc = subprocess.Popen(arg, shell=True, stdin=subprocess.PIPE)
-            new_fp = proc.stdin  # pylint: disable=E1101
+            new_fp = proc.stdin
         else:
             raise TypeError("Invalid type for output format: %s" % outfmt)
 
@@ -509,7 +507,7 @@ def redirect_output(outfmt, errfmt, o_out=None, o_err=None):
             new_fp = open(arg, owith)
         elif mode == "|":
             proc = subprocess.Popen(arg, shell=True, stdin=subprocess.PIPE)
-            new_fp = proc.stdin  # pylint: disable=E1101
+            new_fp = proc.stdin
         else:
             raise TypeError("Invalid type for error format: %s" % errfmt)
 
@@ -937,7 +935,7 @@ def is_resolvable(name):
     should also not exist.  The random entry will be resolved inside
     the search list.
     """
-    global _DNS_REDIRECT_IP  # pylint: disable=W0603
+    global _DNS_REDIRECT_IP
     if _DNS_REDIRECT_IP is None:
         badips = set()
         badnames = ("does-not-exist.example.com.", "example.invalid.",
@@ -1148,7 +1146,7 @@ def chownbyname(fname, user=None, group=None):
 # this returns the specific 'mode' entry, cleanly formatted, with value
 def get_output_cfg(cfg, mode):
     ret = [None, None]
-    if not cfg or not 'output' in cfg:
+    if cfg or 'output' not in cfg:
         return ret
 
     outcfg = cfg['output']
@@ -1299,7 +1297,7 @@ def unmounter(umount):
         yield umount
     finally:
         if umount:
-            umount_cmd = ["umount", '-l', umount]
+            umount_cmd = ["umount", umount]
             subp(umount_cmd)
 
 
@@ -1348,37 +1346,70 @@ def mount_cb(device, callback, data=None, rw=False, mtype=None, sync=True):
     Mount the device, call method 'callback' passing the directory
     in which it was mounted, then unmount.  Return whatever 'callback'
     returned.  If data != None, also pass data to callback.
+
+    mtype is a filesystem type.  it may be a list, string (a single fsname)
+    or a list of fsnames.
     """
+
+    if isinstance(mtype, str):
+        mtypes = [mtype]
+    elif isinstance(mtype, (list, tuple)):
+        mtypes = list(mtype)
+    elif mtype is None:
+        mtypes = None
+
+    # clean up 'mtype' input a bit based on platform.
+    platsys = platform.system().lower()
+    if platsys == "linux":
+        if mtypes is None:
+            mtypes = ["auto"]
+    elif platsys.endswith("bsd"):
+        if mtypes is None:
+            mtypes = ['ufs', 'cd9660', 'vfat']
+        for index, mtype in enumerate(mtypes):
+            if mtype == "iso9660":
+                mtypes[index] = "cd9660"
+    else:
+        # we cannot do a smart "auto", so just call 'mount' once with no -t
+        mtypes = ['']
+
     mounted = mounts()
     with tempdir() as tmpd:
         umount = False
         if device in mounted:
             mountpoint = mounted[device]['mountpoint']
         else:
-            try:
-                mountcmd = ['mount']
-                mountopts = []
-                if rw:
-                    mountopts.append('rw')
-                else:
-                    mountopts.append('ro')
-                if sync:
-                    # This seems like the safe approach to do
-                    # (ie where this is on by default)
-                    mountopts.append("sync")
-                if mountopts:
-                    mountcmd.extend(["-o", ",".join(mountopts)])
-                if mtype:
-                    mountcmd.extend(['-t', mtype])
-                mountcmd.append(device)
-                mountcmd.append(tmpd)
-                subp(mountcmd)
-                umount = tmpd  # This forces it to be unmounted (when set)
-                mountpoint = tmpd
-            except (IOError, OSError) as exc:
-                raise MountFailedError(("Failed mounting %s "
-                                        "to %s due to: %s") %
+            for mtype in mtypes:
+                mountpoint = None
+                try:
+                    mountcmd = ['mount']
+                    mountopts = []
+                    if rw:
+                        mountopts.append('rw')
+                    else:
+                        mountopts.append('ro')
+                    if sync:
+                        # This seems like the safe approach to do
+                        # (ie where this is on by default)
+                        mountopts.append("sync")
+                    if mountopts:
+                        mountcmd.extend(["-o", ",".join(mountopts)])
+                    if mtype:
+                        mountcmd.extend(['-t', mtype])
+                    mountcmd.append(device)
+                    mountcmd.append(tmpd)
+                    subp(mountcmd)
+                    umount = tmpd  # This forces it to be unmounted (when set)
+                    mountpoint = tmpd
+                    break
+                except (IOError, OSError) as exc:
+                    LOG.debug("Failed mount of '%s' as '%s': %s",
+                              device, mtype, exc)
+                    pass
+            if not mountpoint:
+                raise MountFailedError("Failed mounting %s to %s due to: %s" %
                                        (device, tmpd, exc))
+
         # Be nice and ensure it ends with a slash
         if not mountpoint.endswith("/"):
             mountpoint += "/"
@@ -1532,7 +1563,7 @@ def subp(args, data=None, rcs=None, env=None, capture=True, shell=False,
         (out, err) = sp.communicate(data)
     except OSError as e:
         raise ProcessExecutionError(cmd=args, reason=e)
-    rc = sp.returncode  # pylint: disable=E1101
+    rc = sp.returncode
     if rc not in rcs:
         raise ProcessExecutionError(stdout=out, stderr=err,
                                     exit_code=rc,
@@ -1745,7 +1776,7 @@ def parse_mount_info(path, mountinfo_lines, log=LOG):
         # Ignore mount points higher than an already seen mount
         # point.
         if (match_mount_point_elements is not None and
-            len(match_mount_point_elements) > len(mount_point_elements)):
+                len(match_mount_point_elements) > len(mount_point_elements)):
             continue
 
         # Find the '-' which terminates a list of optional columns to
@@ -1926,3 +1957,53 @@ def pathprefix2dict(base, required=None, optional=None, delim=os.path.sep):
         raise ValueError("Missing required files: %s", ','.join(missing))
 
     return ret
+
+
+def read_meminfo(meminfo="/proc/meminfo", raw=False):
+    # read a /proc/meminfo style file and return
+    # a dict with 'total', 'free', and 'available'
+    mpliers = {'kB': 2**10, 'mB': 2 ** 20, 'B': 1, 'gB': 2 ** 30}
+    kmap = {'MemTotal:': 'total', 'MemFree:': 'free',
+            'MemAvailable:': 'available'}
+    ret = {}
+    for line in load_file(meminfo).splitlines():
+        try:
+            key, value, unit = line.split()
+        except ValueError:
+            key, value = line.split()
+            unit = 'B'
+        if raw:
+            ret[key] = int(value) * mpliers[unit]
+        elif key in kmap:
+            ret[kmap[key]] = int(value) * mpliers[unit]
+
+    return ret
+
+
+def human2bytes(size):
+    """Convert human string or integer to size in bytes
+      10M => 10485760
+      .5G => 536870912
+    """
+    size_in = size
+    if size.endswith("B"):
+        size = size[:-1]
+
+    mpliers = {'B': 1, 'K': 2 ** 10, 'M': 2 ** 20, 'G': 2 ** 30, 'T': 2 ** 40}
+
+    num = size
+    mplier = 'B'
+    for m in mpliers:
+        if size.endswith(m):
+            mplier = m
+            num = size[0:-len(m)]
+
+    try:
+        num = float(num)
+    except ValueError:
+        raise ValueError("'%s' is not valid input." % size_in)
+
+    if num < 0:
+        raise ValueError("'%s': cannot be negative" % size_in)
+
+    return int(num * mpliers[mplier])
