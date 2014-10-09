@@ -1,6 +1,6 @@
 from cloudinit.config import cc_power_state_change as psc
 
-from tests.unittests import helpers as t_help
+from .. import helpers as t_help
 
 
 class TestLoadPowerState(t_help.TestCase):
@@ -67,7 +67,7 @@ def check_lps_ret(psc_return, mode=None):
     cmd = psc_return[0]
     timeout = psc_return[1]
 
-    if not 'shutdown' in psc_return[0][0]:
+    if 'shutdown' not in psc_return[0][0]:
         errs.append("string 'shutdown' not in cmd")
 
     if mode is not None:

@@ -1,4 +1,4 @@
-from tests.unittests import helpers
+from . import helpers
 
 from cloudinit import ec2_utils as eu
 from cloudinit import url_helper as uh
@@ -6,7 +6,7 @@ from cloudinit import url_helper as uh
 import httpretty as hp
 
 
-class TestEc2Util(helpers.TestCase):
+class TestEc2Util(helpers.HttprettyTestCase):
     VERSION = 'latest'
 
     @hp.activate
@@ -44,7 +44,7 @@ class TestEc2Util(helpers.TestCase):
 
     @hp.activate
     def test_metadata_fetch_no_keys(self):
-        base_url = 'http://169.254.169.254/%s/meta-data' % (self.VERSION)
+        base_url = 'http://169.254.169.254/%s/meta-data/' % (self.VERSION)
         hp.register_uri(hp.GET, base_url, status=200,
                         body="\n".join(['hostname',
                                         'instance-id',
@@ -62,7 +62,7 @@ class TestEc2Util(helpers.TestCase):
 
     @hp.activate
     def test_metadata_fetch_key(self):
-        base_url = 'http://169.254.169.254/%s/meta-data' % (self.VERSION)
+        base_url = 'http://169.254.169.254/%s/meta-data/' % (self.VERSION)
         hp.register_uri(hp.GET, base_url, status=200,
                         body="\n".join(['hostname',
                                         'instance-id',
@@ -83,7 +83,7 @@ class TestEc2Util(helpers.TestCase):
 
     @hp.activate
     def test_metadata_fetch_with_2_keys(self):
-        base_url = 'http://169.254.169.254/%s/meta-data' % (self.VERSION)
+        base_url = 'http://169.254.169.254/%s/meta-data/' % (self.VERSION)
         hp.register_uri(hp.GET, base_url, status=200,
                         body="\n".join(['hostname',
                                         'instance-id',
@@ -108,7 +108,7 @@ class TestEc2Util(helpers.TestCase):
 
     @hp.activate
     def test_metadata_fetch_bdm(self):
-        base_url = 'http://169.254.169.254/%s/meta-data' % (self.VERSION)
+        base_url = 'http://169.254.169.254/%s/meta-data/' % (self.VERSION)
         hp.register_uri(hp.GET, base_url, status=200,
                         body="\n".join(['hostname',
                                         'instance-id',

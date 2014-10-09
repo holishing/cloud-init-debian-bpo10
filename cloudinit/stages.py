@@ -386,19 +386,19 @@ class Init(object):
             potential_handlers = util.find_modules(path)
             for (fname, mod_name) in potential_handlers.iteritems():
                 try:
-                    mod_locs = importer.find_module(mod_name, [''],
-                                                    ['list_types',
-                                                     'handle_part'])
+                    mod_locs, looked_locs = importer.find_module(
+                        mod_name, [''], ['list_types', 'handle_part'])
                     if not mod_locs:
-                        LOG.warn(("Could not find a valid user-data handler"
-                                  " named %s in file %s"), mod_name, fname)
+                        LOG.warn("Could not find a valid user-data handler"
+                                 " named %s in file %s (searched %s)",
+                                 mod_name, fname, looked_locs)
                         continue
                     mod = importer.import_module(mod_locs[0])
                     mod = handlers.fixup_handler(mod)
                     types = c_handlers.register(mod)
                     if types:
-                        LOG.debug("Added custom handler for %s from %s",
-                                  types, fname)
+                        LOG.debug("Added custom handler for %s [%s] from %s",
+                                  types, mod, fname)
                 except Exception:
                     util.logexc(LOG, "Failed to register handler from %s",
                                 fname)
@@ -621,11 +621,11 @@ class Modules(object):
                           " has an unknown frequency %s"), raw_name, freq)
                 # Reset it so when ran it will get set to a known value
                 freq = None
-            mod_locs = importer.find_module(mod_name,
-                                            ['', type_utils.obj_name(config)],
-                                            ['handle'])
+            mod_locs, looked_locs = importer.find_module(
+                mod_name, ['', type_utils.obj_name(config)], ['handle'])
             if not mod_locs:
-                LOG.warn("Could not find module named %s", mod_name)
+                LOG.warn("Could not find module named %s (searched %s)",
+                         mod_name, looked_locs)
                 continue
             mod = config.fixup_module(importer.import_module(mod_locs[0]))
             mostly_mods.append([mod, raw_name, freq, run_args])
@@ -642,8 +642,10 @@ class Modules(object):
                 # Try the modules frequency, otherwise fallback to a known one
                 if not freq:
                     freq = mod.frequency
-                if not freq in FREQUENCIES:
+                if freq not in FREQUENCIES:
                     freq = PER_INSTANCE
+                LOG.debug("Running module %s (%s) with frequency %s",
+                          name, mod, freq)
 
                 # Use the configs logger and not our own
                 # TODO(harlowja): possibly check the module
@@ -657,7 +659,7 @@ class Modules(object):
                 run_name = "config-%s" % (name)
                 cc.run(run_name, mod.handle, func_args, freq=freq)
             except Exception as e:
-                util.logexc(LOG, "Running %s (%s) failed", name, mod)
+                util.logexc(LOG, "Running module %s (%s) failed", name, mod)
                 failures.append((name, e))
         return (which_ran, failures)
 
