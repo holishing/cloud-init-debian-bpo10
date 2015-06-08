@@ -1,3 +1,9 @@
+cloud-init (0.7.6~bzr976-3) unstable; urgency=medium
+
+  * Added upstream debian/*.service files (Closes: #784083).
+
+ -- Thomas Goirand <zigo@debian.org>  Mon, 08 Jun 2015 11:33:54 +0200
+
 cloud-init (0.7.6~bzr976-2) unstable; urgency=medium
 
   * Build-depend on iproute2 instead of iproute (Closes: #753695). 
