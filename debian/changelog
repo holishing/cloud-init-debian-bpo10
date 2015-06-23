@@ -1,3 +1,12 @@
+cloud-init (0.7.6~bzr976-4) unstable; urgency=medium
+
+  * Added cloud-init.cloud-config.target missing file.
+  * Removed explicit local-fs.target as services have use
+    DefaultDependencies=yes (which is the default). Thanks to Michael Biebl
+    <biebl@debian.org> for pointing it out.
+
+ -- Thomas Goirand <zigo@debian.org>  Tue, 23 Jun 2015 16:02:34 +0200
+
 cloud-init (0.7.6~bzr976-3) unstable; urgency=medium
 
   * Added upstream debian/*.service files (Closes: #784083).

@@ -1,7 +1,5 @@
 [Unit]
 Description=Initial cloud-init job (pre-networking)
-Wants=local-fs.target
-After=local-fs.target
 
 [Service]
 Type=oneshot
