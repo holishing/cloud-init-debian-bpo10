@@ -1,11 +1,12 @@
 [Unit]
 Description=Apply the settings specified in cloud-config
 After=network.target syslog.target cloud-config.target
-Requires=cloud-config.target
+Requires=cloud-init.service
+After=cloud-init.service
 Wants=network.target
 
 [Service]
-Type=oneshot
+Type=simple
 ExecStart=/usr/bin/cloud-init modules --mode=config
 RemainAfterExit=yes
 TimeoutSec=0

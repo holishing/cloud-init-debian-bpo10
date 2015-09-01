@@ -2,7 +2,7 @@
 Description=Initial cloud-init job (pre-networking)
 
 [Service]
-Type=oneshot
+Type=simple
 ExecStart=/usr/bin/cloud-init init --local
 RemainAfterExit=yes
 TimeoutSec=0

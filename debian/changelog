@@ -1,3 +1,13 @@
+cloud-init (0.7.6~bzr976-5) unstable; urgency=medium
+
+  * Fixed .service dependency on ssh and not sshd.
+  * Switched from Type=oneshot to Type=simple so that other services don't
+    keep on waiting for it forever.
+  * cloud-config.service doesn't depend on itself anymore, and now has:
+    Requires=cloud-init.service, After=cloud-init.service
+
+ -- Thomas Goirand <zigo@debian.org>  Tue, 01 Sep 2015 13:25:50 +0200
+
 cloud-init (0.7.6~bzr976-4) unstable; urgency=medium
 
   * Added cloud-init.cloud-config.target missing file.

@@ -3,10 +3,10 @@ Description=Initial cloud-init job (metadata service crawler)
 After=network.target cloud-init-local.service
 Before=sshd.service sshd-keygen.service
 Requires=network.target
-Wants=cloud-init-local.service sshd.service sshd-keygen.service
+Wants=cloud-init-local.service ssh.service sshd-keygen.service
 
 [Service]
-Type=oneshot
+Type=simple
 ExecStart=/usr/bin/cloud-init init
 RemainAfterExit=yes
 TimeoutSec=0
