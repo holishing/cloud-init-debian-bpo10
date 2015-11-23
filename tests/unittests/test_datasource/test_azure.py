@@ -18,7 +18,7 @@ import stat
 import yaml
 import shutil
 import tempfile
-import unittest
+import xml.etree.ElementTree as ET
 
 
 def construct_valid_ovf_env(data=None, pubkeys=None, userdata=None):
@@ -54,10 +54,13 @@ def construct_valid_ovf_env(data=None, pubkeys=None, userdata=None):
 
     if pubkeys:
         content += "<SSH><PublicKeys>\n"
-        for fp, path in pubkeys:
+        for fp, path, value in pubkeys:
             content += " <PublicKey>"
-            content += ("<Fingerprint>%s</Fingerprint><Path>%s</Path>" %
-                        (fp, path))
+            if fp and path:
+                content += ("<Fingerprint>%s</Fingerprint><Path>%s</Path>" %
+                            (fp, path))
+            if value:
+                content += "<Value>%s</Value>" % value
             content += "</PublicKey>\n"
         content += "</PublicKeys></SSH>"
     content += """
@@ -116,9 +119,6 @@ class TestAzureDataSource(TestCase):
             data['iid_from_shared_cfg'] = path
             return 'i-my-azure-id'
 
-        def _apply_hostname_bounce(**kwargs):
-            data['apply_hostname_bounce'] = kwargs
-
         if data.get('ovfcontent') is not None:
             populate_dir(os.path.join(self.paths.seed_dir, "azure"),
                          {'ovf-env.xml': data['ovfcontent']})
@@ -126,19 +126,60 @@ class TestAzureDataSource(TestCase):
         mod = DataSourceAzure
         mod.BUILTIN_DS_CONFIG['data_dir'] = self.waagent_d
 
+        self.get_metadata_from_fabric = mock.MagicMock(return_value={
+            'instance-id': 'i-my-azure-id',
+            'public-keys': [],
+        })
+
         self.apply_patches([
             (mod, 'list_possible_azure_ds_devs', dsdevs),
             (mod, 'invoke_agent', _invoke_agent),
             (mod, 'wait_for_files', _wait_for_files),
             (mod, 'pubkeys_from_crt_files', _pubkeys_from_crt_files),
             (mod, 'iid_from_shared_config', _iid_from_shared_config),
-            (mod, 'apply_hostname_bounce', _apply_hostname_bounce),
-            ])
+            (mod, 'perform_hostname_bounce', mock.MagicMock()),
+            (mod, 'get_hostname', mock.MagicMock()),
+            (mod, 'set_hostname', mock.MagicMock()),
+            (mod, 'get_metadata_from_fabric', self.get_metadata_from_fabric),
+        ])
 
         dsrc = mod.DataSourceAzureNet(
             data.get('sys_cfg', {}), distro=None, paths=self.paths)
 
         return dsrc
+
+    def xml_equals(self, oxml, nxml):
+        """Compare two sets of XML to make sure they are equal"""
+
+        def create_tag_index(xml):
+            et = ET.fromstring(xml)
+            ret = {}
+            for x in et.iter():
+                ret[x.tag] = x
+            return ret
+
+        def tags_exists(x, y):
+            for tag in x.keys():
+                self.assertIn(tag, y)
+            for tag in y.keys():
+                self.assertIn(tag, x)
+
+        def tags_equal(x, y):
+            for x_tag, x_val in x.items():
+                y_val = y.get(x_val.tag)
+                self.assertEquals(x_val.text, y_val.text)
+
+        old_cnt = create_tag_index(oxml)
+        new_cnt = create_tag_index(nxml)
+        tags_exists(old_cnt, new_cnt)
+        tags_equal(old_cnt, new_cnt)
+
+    def xml_notequals(self, oxml, nxml):
+        try:
+            self.xml_equals(oxml, nxml)
+        except AssertionError:
+            return
+        raise AssertionError("XML is the same")
 
     def test_basic_seed_dir(self):
         odata = {'HostName': "myhost", 'UserName': "myuser"}
@@ -259,10 +300,10 @@ class TestAzureDataSource(TestCase):
         self.assertFalse(ret)
         self.assertFalse('agent_invoked' in data)
 
-    def test_cfg_has_pubkeys(self):
+    def test_cfg_has_pubkeys_fingerprint(self):
         odata = {'HostName': "myhost", 'UserName': "myuser"}
-        mypklist = [{'fingerprint': 'fp1', 'path': 'path1'}]
-        pubkeys = [(x['fingerprint'], x['path']) for x in mypklist]
+        mypklist = [{'fingerprint': 'fp1', 'path': 'path1', 'value': ''}]
+        pubkeys = [(x['fingerprint'], x['path'], x['value']) for x in mypklist]
         data = {'ovfcontent': construct_valid_ovf_env(data=odata,
                                                       pubkeys=pubkeys)}
 
@@ -271,47 +312,39 @@ class TestAzureDataSource(TestCase):
         self.assertTrue(ret)
         for mypk in mypklist:
             self.assertIn(mypk, dsrc.cfg['_pubkeys'])
+            self.assertIn('pubkey_from', dsrc.metadata['public-keys'][-1])
 
-    def test_disabled_bounce(self):
-        pass
+    def test_cfg_has_pubkeys_value(self):
+        # make sure that provided key is used over fingerprint
+        odata = {'HostName': "myhost", 'UserName': "myuser"}
+        mypklist = [{'fingerprint': 'fp1', 'path': 'path1', 'value': 'value1'}]
+        pubkeys = [(x['fingerprint'], x['path'], x['value']) for x in mypklist]
+        data = {'ovfcontent': construct_valid_ovf_env(data=odata,
+                                                      pubkeys=pubkeys)}
 
-    def test_apply_bounce_call_1(self):
-        # hostname needs to get through to apply_hostname_bounce
-        odata = {'HostName': 'my-random-hostname'}
-        data = {'ovfcontent': construct_valid_ovf_env(data=odata)}
+        dsrc = self._get_ds(data)
+        ret = dsrc.get_data()
+        self.assertTrue(ret)
 
-        self._get_ds(data).get_data()
-        self.assertIn('hostname', data['apply_hostname_bounce'])
-        self.assertEqual(data['apply_hostname_bounce']['hostname'],
-                         odata['HostName'])
+        for mypk in mypklist:
+            self.assertIn(mypk, dsrc.cfg['_pubkeys'])
+            self.assertIn(mypk['value'], dsrc.metadata['public-keys'])
 
-    def test_apply_bounce_call_configurable(self):
-        # hostname_bounce should be configurable in datasource cfg
-        cfg = {'hostname_bounce': {'interface': 'eth1', 'policy': 'off',
-                                   'command': 'my-bounce-command',
-                                   'hostname_command': 'my-hostname-command'}}
-        odata = {'HostName': "xhost",
-                'dscfg': {'text': b64e(yaml.dump(cfg)),
-                          'encoding': 'base64'}}
-        data = {'ovfcontent': construct_valid_ovf_env(data=odata)}
-        self._get_ds(data).get_data()
+    def test_cfg_has_no_fingerprint_has_value(self):
+        # test value is used when fingerprint not provided
+        odata = {'HostName': "myhost", 'UserName': "myuser"}
+        mypklist = [{'fingerprint': None, 'path': 'path1', 'value': 'value1'}]
+        pubkeys = [(x['fingerprint'], x['path'], x['value']) for x in mypklist]
+        data = {'ovfcontent': construct_valid_ovf_env(data=odata,
+                                                      pubkeys=pubkeys)}
 
-        for k in cfg['hostname_bounce']:
-            self.assertIn(k, data['apply_hostname_bounce'])
+        dsrc = self._get_ds(data)
+        ret = dsrc.get_data()
+        self.assertTrue(ret)
 
-        for k, v in cfg['hostname_bounce'].items():
-            self.assertEqual(data['apply_hostname_bounce'][k], v)
+        for mypk in mypklist:
+            self.assertIn(mypk['value'], dsrc.metadata['public-keys'])
 
-    def test_set_hostname_disabled(self):
-        # config specifying set_hostname off should not bounce
-        cfg = {'set_hostname': False}
-        odata = {'HostName': "xhost",
-                'dscfg': {'text': b64e(yaml.dump(cfg)),
-                          'encoding': 'base64'}}
-        data = {'ovfcontent': construct_valid_ovf_env(data=odata)}
-        self._get_ds(data).get_data()
-
-        self.assertEqual(data.get('apply_hostname_bounce', "N/A"), "N/A")
 
     def test_default_ephemeral(self):
         # make sure the ephemeral device works
@@ -359,6 +392,31 @@ class TestAzureDataSource(TestCase):
 
         self.assertEqual(userdata.encode('us-ascii'), dsrc.userdata_raw)
 
+    def test_password_redacted_in_ovf(self):
+        odata = {'HostName': "myhost", 'UserName': "myuser",
+                 'UserPassword': "mypass"}
+        data = {'ovfcontent': construct_valid_ovf_env(data=odata)}
+        dsrc = self._get_ds(data)
+        ret = dsrc.get_data()
+
+        self.assertTrue(ret)
+        ovf_env_path = os.path.join(self.waagent_d, 'ovf-env.xml')
+
+        # The XML should not be same since the user password is redacted
+        on_disk_ovf = load_file(ovf_env_path)
+        self.xml_notequals(data['ovfcontent'], on_disk_ovf)
+
+        # Make sure that the redacted password on disk is not used by CI
+        self.assertNotEquals(dsrc.cfg.get('password'),
+                             DataSourceAzure.DEF_PASSWD_REDACTION)
+
+        # Make sure that the password was really encrypted
+        et = ET.fromstring(on_disk_ovf)
+        for elem in et.iter():
+            if 'UserPassword' in elem.tag:
+                self.assertEquals(DataSourceAzure.DEF_PASSWD_REDACTION,
+                                  elem.text)
+
     def test_ovf_env_arrives_in_waagent_dir(self):
         xml = construct_valid_ovf_env(data={}, userdata="FOODATA")
         dsrc = self._get_ds({'ovfcontent': xml})
@@ -368,7 +426,7 @@ class TestAzureDataSource(TestCase):
         # we expect that the ovf-env.xml file is copied there.
         ovf_env_path = os.path.join(self.waagent_d, 'ovf-env.xml')
         self.assertTrue(os.path.exists(ovf_env_path))
-        self.assertEqual(xml, load_file(ovf_env_path))
+        self.xml_equals(xml, load_file(ovf_env_path))
 
     def test_ovf_can_include_unicode(self):
         xml = construct_valid_ovf_env(data={})
@@ -417,12 +475,200 @@ class TestAzureDataSource(TestCase):
         self.assertEqual(dsrc.userdata_raw, b"NEW_USERDATA")
         self.assertTrue(os.path.exists(
             os.path.join(self.waagent_d, 'otherfile')))
-        self.assertFalse(
-            os.path.exists(os.path.join(self.waagent_d, 'SharedConfig.xml')))
-        self.assertTrue(
-            os.path.exists(os.path.join(self.waagent_d, 'ovf-env.xml')))
-        self.assertEqual(new_ovfenv,
-            load_file(os.path.join(self.waagent_d, 'ovf-env.xml')))
+        self.assertFalse(os.path.exists(
+                        os.path.join(self.waagent_d, 'SharedConfig.xml')))
+        self.assertTrue(os.path.exists(
+                        os.path.join(self.waagent_d, 'ovf-env.xml')))
+        new_xml = load_file(os.path.join(self.waagent_d, 'ovf-env.xml'))
+        self.xml_equals(new_ovfenv, new_xml)
+
+    def test_exception_fetching_fabric_data_doesnt_propagate(self):
+        ds = self._get_ds({'ovfcontent': construct_valid_ovf_env()})
+        ds.ds_cfg['agent_command'] = '__builtin__'
+        self.get_metadata_from_fabric.side_effect = Exception
+        self.assertFalse(ds.get_data())
+
+    def test_fabric_data_included_in_metadata(self):
+        ds = self._get_ds({'ovfcontent': construct_valid_ovf_env()})
+        ds.ds_cfg['agent_command'] = '__builtin__'
+        self.get_metadata_from_fabric.return_value = {'test': 'value'}
+        ret = ds.get_data()
+        self.assertTrue(ret)
+        self.assertEqual('value', ds.metadata['test'])
+
+
+class TestAzureBounce(TestCase):
+
+    def mock_out_azure_moving_parts(self):
+        self.patches.enter_context(
+            mock.patch.object(DataSourceAzure, 'invoke_agent'))
+        self.patches.enter_context(
+            mock.patch.object(DataSourceAzure, 'wait_for_files'))
+        self.patches.enter_context(
+            mock.patch.object(DataSourceAzure, 'iid_from_shared_config',
+                              mock.MagicMock(return_value='i-my-azure-id')))
+        self.patches.enter_context(
+            mock.patch.object(DataSourceAzure, 'list_possible_azure_ds_devs',
+                              mock.MagicMock(return_value=[])))
+        self.patches.enter_context(
+            mock.patch.object(DataSourceAzure,
+                              'find_fabric_formatted_ephemeral_disk',
+                              mock.MagicMock(return_value=None)))
+        self.patches.enter_context(
+            mock.patch.object(DataSourceAzure,
+                              'find_fabric_formatted_ephemeral_part',
+                              mock.MagicMock(return_value=None)))
+        self.patches.enter_context(
+            mock.patch.object(DataSourceAzure, 'get_metadata_from_fabric',
+                              mock.MagicMock(return_value={})))
+
+    def setUp(self):
+        super(TestAzureBounce, self).setUp()
+        self.tmp = tempfile.mkdtemp()
+        self.waagent_d = os.path.join(self.tmp, 'var', 'lib', 'waagent')
+        self.paths = helpers.Paths({'cloud_dir': self.tmp})
+        self.addCleanup(shutil.rmtree, self.tmp)
+        DataSourceAzure.BUILTIN_DS_CONFIG['data_dir'] = self.waagent_d
+        self.patches = ExitStack()
+        self.mock_out_azure_moving_parts()
+        self.get_hostname = self.patches.enter_context(
+            mock.patch.object(DataSourceAzure, 'get_hostname'))
+        self.set_hostname = self.patches.enter_context(
+            mock.patch.object(DataSourceAzure, 'set_hostname'))
+        self.subp = self.patches.enter_context(
+            mock.patch('cloudinit.sources.DataSourceAzure.util.subp'))
+
+    def tearDown(self):
+        self.patches.close()
+
+    def _get_ds(self, ovfcontent=None):
+        if ovfcontent is not None:
+            populate_dir(os.path.join(self.paths.seed_dir, "azure"),
+                         {'ovf-env.xml': ovfcontent})
+        return DataSourceAzure.DataSourceAzureNet(
+            {}, distro=None, paths=self.paths)
+
+    def get_ovf_env_with_dscfg(self, hostname, cfg):
+        odata = {
+            'HostName': hostname,
+            'dscfg': {
+                'text': b64e(yaml.dump(cfg)),
+                'encoding': 'base64'
+            }
+        }
+        return construct_valid_ovf_env(data=odata)
+
+    def test_disabled_bounce_does_not_change_hostname(self):
+        cfg = {'hostname_bounce': {'policy': 'off'}}
+        self._get_ds(self.get_ovf_env_with_dscfg('test-host', cfg)).get_data()
+        self.assertEqual(0, self.set_hostname.call_count)
+
+    @mock.patch('cloudinit.sources.DataSourceAzure.perform_hostname_bounce')
+    def test_disabled_bounce_does_not_perform_bounce(
+            self, perform_hostname_bounce):
+        cfg = {'hostname_bounce': {'policy': 'off'}}
+        self._get_ds(self.get_ovf_env_with_dscfg('test-host', cfg)).get_data()
+        self.assertEqual(0, perform_hostname_bounce.call_count)
+
+    def test_same_hostname_does_not_change_hostname(self):
+        host_name = 'unchanged-host-name'
+        self.get_hostname.return_value = host_name
+        cfg = {'hostname_bounce': {'policy': 'yes'}}
+        self._get_ds(self.get_ovf_env_with_dscfg(host_name, cfg)).get_data()
+        self.assertEqual(0, self.set_hostname.call_count)
+
+    @mock.patch('cloudinit.sources.DataSourceAzure.perform_hostname_bounce')
+    def test_unchanged_hostname_does_not_perform_bounce(
+            self, perform_hostname_bounce):
+        host_name = 'unchanged-host-name'
+        self.get_hostname.return_value = host_name
+        cfg = {'hostname_bounce': {'policy': 'yes'}}
+        self._get_ds(self.get_ovf_env_with_dscfg(host_name, cfg)).get_data()
+        self.assertEqual(0, perform_hostname_bounce.call_count)
+
+    @mock.patch('cloudinit.sources.DataSourceAzure.perform_hostname_bounce')
+    def test_force_performs_bounce_regardless(self, perform_hostname_bounce):
+        host_name = 'unchanged-host-name'
+        self.get_hostname.return_value = host_name
+        cfg = {'hostname_bounce': {'policy': 'force'}}
+        self._get_ds(self.get_ovf_env_with_dscfg(host_name, cfg)).get_data()
+        self.assertEqual(1, perform_hostname_bounce.call_count)
+
+    def test_different_hostnames_sets_hostname(self):
+        expected_hostname = 'azure-expected-host-name'
+        self.get_hostname.return_value = 'default-host-name'
+        self._get_ds(
+            self.get_ovf_env_with_dscfg(expected_hostname, {})).get_data()
+        self.assertEqual(expected_hostname,
+                         self.set_hostname.call_args_list[0][0][0])
+
+    @mock.patch('cloudinit.sources.DataSourceAzure.perform_hostname_bounce')
+    def test_different_hostnames_performs_bounce(
+            self, perform_hostname_bounce):
+        expected_hostname = 'azure-expected-host-name'
+        self.get_hostname.return_value = 'default-host-name'
+        self._get_ds(
+            self.get_ovf_env_with_dscfg(expected_hostname, {})).get_data()
+        self.assertEqual(1, perform_hostname_bounce.call_count)
+
+    def test_different_hostnames_sets_hostname_back(self):
+        initial_host_name = 'default-host-name'
+        self.get_hostname.return_value = initial_host_name
+        self._get_ds(
+            self.get_ovf_env_with_dscfg('some-host-name', {})).get_data()
+        self.assertEqual(initial_host_name,
+                         self.set_hostname.call_args_list[-1][0][0])
+
+    @mock.patch('cloudinit.sources.DataSourceAzure.perform_hostname_bounce')
+    def test_failure_in_bounce_still_resets_host_name(
+            self, perform_hostname_bounce):
+        perform_hostname_bounce.side_effect = Exception
+        initial_host_name = 'default-host-name'
+        self.get_hostname.return_value = initial_host_name
+        self._get_ds(
+            self.get_ovf_env_with_dscfg('some-host-name', {})).get_data()
+        self.assertEqual(initial_host_name,
+                         self.set_hostname.call_args_list[-1][0][0])
+
+    def test_environment_correct_for_bounce_command(self):
+        interface = 'int0'
+        hostname = 'my-new-host'
+        old_hostname = 'my-old-host'
+        self.get_hostname.return_value = old_hostname
+        cfg = {'hostname_bounce': {'interface': interface, 'policy': 'force'}}
+        data = self.get_ovf_env_with_dscfg(hostname, cfg)
+        self._get_ds(data).get_data()
+        self.assertEqual(1, self.subp.call_count)
+        bounce_env = self.subp.call_args[1]['env']
+        self.assertEqual(interface, bounce_env['interface'])
+        self.assertEqual(hostname, bounce_env['hostname'])
+        self.assertEqual(old_hostname, bounce_env['old_hostname'])
+
+    def test_default_bounce_command_used_by_default(self):
+        cmd = 'default-bounce-command'
+        DataSourceAzure.BUILTIN_DS_CONFIG['hostname_bounce']['command'] = cmd
+        cfg = {'hostname_bounce': {'policy': 'force'}}
+        data = self.get_ovf_env_with_dscfg('some-hostname', cfg)
+        self._get_ds(data).get_data()
+        self.assertEqual(1, self.subp.call_count)
+        bounce_args = self.subp.call_args[1]['args']
+        self.assertEqual(cmd, bounce_args)
+
+    @mock.patch('cloudinit.sources.DataSourceAzure.perform_hostname_bounce')
+    def test_set_hostname_option_can_disable_bounce(
+            self, perform_hostname_bounce):
+        cfg = {'set_hostname': False, 'hostname_bounce': {'policy': 'force'}}
+        data = self.get_ovf_env_with_dscfg('some-hostname', cfg)
+        self._get_ds(data).get_data()
+
+        self.assertEqual(0, perform_hostname_bounce.call_count)
+
+    def test_set_hostname_option_can_disable_hostname_set(self):
+        cfg = {'set_hostname': False, 'hostname_bounce': {'policy': 'force'}}
+        data = self.get_ovf_env_with_dscfg('some-hostname', cfg)
+        self._get_ds(data).get_data()
+
+        self.assertEqual(0, self.set_hostname.call_count)
 
 
 class TestReadAzureOvf(TestCase):
@@ -432,23 +678,9 @@ class TestReadAzureOvf(TestCase):
             DataSourceAzure.read_azure_ovf, invalid_xml)
 
     def test_load_with_pubkeys(self):
-        mypklist = [{'fingerprint': 'fp1', 'path': 'path1'}]
-        pubkeys = [(x['fingerprint'], x['path']) for x in mypklist]
+        mypklist = [{'fingerprint': 'fp1', 'path': 'path1', 'value': ''}]
+        pubkeys = [(x['fingerprint'], x['path'], x['value']) for x in mypklist]
         content = construct_valid_ovf_env(pubkeys=pubkeys)
         (_md, _ud, cfg) = DataSourceAzure.read_azure_ovf(content)
         for mypk in mypklist:
             self.assertIn(mypk, cfg['_pubkeys'])
-
-
-class TestReadAzureSharedConfig(unittest.TestCase):
-    def test_valid_content(self):
-        xml = """<?xml version="1.0" encoding="utf-8"?>
-            <SharedConfig>
-             <Deployment name="MY_INSTANCE_ID">
-              <Service name="myservice"/>
-              <ServiceInstance name="INSTANCE_ID.0" guid="{abcd-uuid}" />
-             </Deployment>
-            <Incarnation number="1"/>
-            </SharedConfig>"""
-        ret = DataSourceAzure.iid_from_shared_config_content(xml)
-        self.assertEqual("MY_INSTANCE_ID", ret)
