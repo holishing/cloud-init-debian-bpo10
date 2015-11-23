@@ -53,9 +53,9 @@ BUILTIN_DS_CONFIG = {
 
 BUILTIN_CLOUD_CONFIG = {
     'disk_setup': {
-        'ephemeral0': {'table_type': 'mbr',
-                       'layout': True,
-                       'overwrite': False},
+        'ephemeral0': {'table_type': 'gpt',
+                       'layout': [100],
+                       'overwrite': True},
         },
     'fs_setup': [{'filesystem': 'ext4',
                   'device': 'ephemeral0.1',
@@ -124,7 +124,8 @@ class DataSourceAzureNet(sources.DataSource):
             LOG.debug("using files cached in %s", ddir)
 
         # azure / hyper-v provides random data here
-        seed = util.load_file("/sys/firmware/acpi/tables/OEM0", quiet=True)
+        seed = util.load_file("/sys/firmware/acpi/tables/OEM0",
+                              quiet=True, decode=False)
         if seed:
             self.metadata['random_seed'] = seed
 
@@ -136,7 +137,7 @@ class DataSourceAzureNet(sources.DataSource):
 
         if found != ddir:
             cached_ovfenv = util.load_file(
-                os.path.join(ddir, 'ovf-env.xml'), quiet=True)
+                os.path.join(ddir, 'ovf-env.xml'), quiet=True, decode=False)
             if cached_ovfenv != files['ovf-env.xml']:
                 # source was not walinux-agent's datadir, so we have to clean
                 # up so 'wait_for_files' doesn't return early due to stale data
@@ -151,7 +152,7 @@ class DataSourceAzureNet(sources.DataSource):
 
         # walinux agent writes files world readable, but expects
         # the directory to be protected.
-        write_files(ddir, files, dirmode=0700)
+        write_files(ddir, files, dirmode=0o700)
 
         # handle the hostname 'publishing'
         try:
@@ -390,7 +391,7 @@ def write_files(datadir, files, dirmode=None):
     util.ensure_dir(datadir, dirmode)
     for (name, content) in files.items():
         util.write_file(filename=os.path.join(datadir, name),
-                        content=content, mode=0600)
+                        content=content, mode=0o600)
 
 
 def invoke_agent(cmd):
@@ -592,7 +593,7 @@ def load_azure_ds_dir(source_dir):
     if not os.path.isfile(ovf_file):
         raise NonAzureDataSource("No ovf-env file found")
 
-    with open(ovf_file, "r") as fp:
+    with open(ovf_file, "rb") as fp:
         contents = fp.read()
 
     md, ud, cfg = read_azure_ovf(contents)

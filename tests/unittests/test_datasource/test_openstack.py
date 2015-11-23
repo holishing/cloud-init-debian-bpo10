@@ -19,13 +19,11 @@
 import copy
 import json
 import re
-import unittest
-
-from StringIO import StringIO
-
-from urlparse import urlparse
 
 from .. import helpers as test_helpers
+
+from six import StringIO
+from six.moves.urllib.parse import urlparse
 
 from cloudinit import helpers
 from cloudinit import settings
@@ -33,7 +31,7 @@ from cloudinit.sources import DataSourceOpenStack as ds
 from cloudinit.sources.helpers import openstack
 from cloudinit import util
 
-import httpretty as hp
+hp = test_helpers.import_httpretty()
 
 BASE_URL = "http://169.254.169.254"
 PUBKEY = u'ssh-rsa AAAAB3NzaC1....sIkJhq8wdX+4I3A4cYbYP ubuntu@server-460\n'
@@ -51,7 +49,7 @@ EC2_META = {
     'public-ipv4': '0.0.0.1',
     'reservation-id': 'r-iru5qm4m',
 }
-USER_DATA = '#!/bin/sh\necho This is user data\n'
+USER_DATA = b'#!/bin/sh\necho This is user data\n'
 VENDOR_DATA = {
     'magic': '',
 }
@@ -65,8 +63,8 @@ OSTACK_META = {
     'public_keys': {'mykey': PUBKEY},
     'uuid': 'b0fa911b-69d4-4476-bbe2-1c92bff6535c',
 }
-CONTENT_0 = 'This is contents of /etc/foo.cfg\n'
-CONTENT_1 = '# this is /etc/bar/bar.cfg\n'
+CONTENT_0 = b'This is contents of /etc/foo.cfg\n'
+CONTENT_1 = b'# this is /etc/bar/bar.cfg\n'
 OS_FILES = {
     'openstack/latest/meta_data.json': json.dumps(OSTACK_META),
     'openstack/latest/user_data': USER_DATA,
@@ -318,7 +316,7 @@ class TestOpenStackDataSource(test_helpers.HttprettyTestCase):
         self.assertIsNone(ds_os.version)
 
 
-class TestVendorDataLoading(unittest.TestCase):
+class TestVendorDataLoading(test_helpers.TestCase):
     def cvj(self, data):
         return openstack.convert_vendordata_json(data)
 

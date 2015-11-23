@@ -29,13 +29,17 @@
 #       http://us-east.manta.joyent.com/jmc/public/mdata/datadict.html
 #       Comments with "@datadictionary" are snippets of the definition
 
-import base64
+import binascii
+import contextlib
+import os
+import random
+import re
+
+import serial
+
 from cloudinit import log as logging
 from cloudinit import sources
 from cloudinit import util
-import os
-import os.path
-import serial
 
 
 LOG = logging.getLogger(__name__)
@@ -201,7 +205,7 @@ class DataSourceSmartOS(sources.DataSource):
         if b64_all is not None:
             self.b64_all = util.is_true(b64_all)
 
-        for ci_noun, attribute in SMARTOS_ATTRIB_MAP.iteritems():
+        for ci_noun, attribute in SMARTOS_ATTRIB_MAP.items():
             smartos_noun, strip = attribute
             md[ci_noun] = self.query(smartos_noun, strip=strip)
 
@@ -218,11 +222,12 @@ class DataSourceSmartOS(sources.DataSource):
         user_script = os.path.join(data_d, 'user-script')
         u_script_l = "%s/user-script" % LEGACY_USER_D
         write_boot_content(md.get('user-script'), content_f=user_script,
-                           link=u_script_l, shebang=True, mode=0700)
+                           link=u_script_l, shebang=True, mode=0o700)
 
         operator_script = os.path.join(data_d, 'operator-script')
         write_boot_content(md.get('operator-script'),
-                           content_f=operator_script, shebang=False, mode=0700)
+                           content_f=operator_script, shebang=False,
+                           mode=0o700)
 
         # @datadictionary:  This key has no defined format, but its value
         # is written to the file /var/db/mdata-user-data on each boot prior
@@ -299,6 +304,65 @@ def get_serial(seed_device, seed_timeout):
     return ser
 
 
+class JoyentMetadataFetchException(Exception):
+    pass
+
+
+class JoyentMetadataClient(object):
+    """
+    A client implementing v2 of the Joyent Metadata Protocol Specification.
+
+    The full specification can be found at
+    http://eng.joyent.com/mdata/protocol.html
+    """
+    line_regex = re.compile(
+        r'V2 (?P<length>\d+) (?P<checksum>[0-9a-f]+)'
+        r' (?P<body>(?P<request_id>[0-9a-f]+) (?P<status>SUCCESS|NOTFOUND)'
+        r'( (?P<payload>.+))?)')
+
+    def __init__(self, serial):
+        self.serial = serial
+
+    def _checksum(self, body):
+        return '{0:08x}'.format(
+            binascii.crc32(body.encode('utf-8')) & 0xffffffff)
+
+    def _get_value_from_frame(self, expected_request_id, frame):
+        frame_data = self.line_regex.match(frame).groupdict()
+        if int(frame_data['length']) != len(frame_data['body']):
+            raise JoyentMetadataFetchException(
+                'Incorrect frame length given ({0} != {1}).'.format(
+                    frame_data['length'], len(frame_data['body'])))
+        expected_checksum = self._checksum(frame_data['body'])
+        if frame_data['checksum'] != expected_checksum:
+            raise JoyentMetadataFetchException(
+                'Invalid checksum (expected: {0}; got {1}).'.format(
+                    expected_checksum, frame_data['checksum']))
+        if frame_data['request_id'] != expected_request_id:
+            raise JoyentMetadataFetchException(
+                'Request ID mismatch (expected: {0}; got {1}).'.format(
+                    expected_request_id, frame_data['request_id']))
+        if not frame_data.get('payload', None):
+            LOG.debug('No value found.')
+            return None
+        value = util.b64d(frame_data['payload'])
+        LOG.debug('Value "%s" found.', value)
+        return value
+
+    def get_metadata(self, metadata_key):
+        LOG.debug('Fetching metadata key "%s"...', metadata_key)
+        request_id = '{0:08x}'.format(random.randint(0, 0xffffffff))
+        message_body = '{0} GET {1}'.format(request_id,
+                                            util.b64e(metadata_key))
+        msg = 'V2 {0} {1} {2}\n'.format(
+            len(message_body), self._checksum(message_body), message_body)
+        LOG.debug('Writing "%s" to serial port.', msg)
+        self.serial.write(msg.encode('ascii'))
+        response = self.serial.readline().decode('ascii')
+        LOG.debug('Read "%s" from serial port.', response)
+        return self._get_value_from_frame(request_id, response)
+
+
 def query_data(noun, seed_device, seed_timeout, strip=False, default=None,
                b64=None):
     """Makes a request to via the serial console via "GET <NOUN>"
@@ -312,33 +376,20 @@ def query_data(noun, seed_device, seed_timeout, strip=False, default=None,
         encoded, so this method relies on being told if the data is base64 or
         not.
     """
-
     if not noun:
         return False
 
-    ser = get_serial(seed_device, seed_timeout)
-    ser.write("GET %s\n" % noun.rstrip())
-    status = str(ser.readline()).rstrip()
-    response = []
-    eom_found = False
+    with contextlib.closing(get_serial(seed_device, seed_timeout)) as ser:
+        client = JoyentMetadataClient(ser)
+        response = client.get_metadata(noun)
 
-    if 'SUCCESS' not in status:
-        ser.close()
+    if response is None:
         return default
-
-    while not eom_found:
-        m = ser.readline()
-        if m.rstrip() == ".":
-            eom_found = True
-        else:
-            response.append(m)
-
-    ser.close()
 
     if b64 is None:
         b64 = query_data('b64-%s' % noun, seed_device=seed_device,
-                            seed_timeout=seed_timeout, b64=False,
-                            default=False, strip=True)
+                         seed_timeout=seed_timeout, b64=False,
+                         default=False, strip=True)
         b64 = util.is_true(b64)
 
     resp = None
@@ -349,8 +400,9 @@ def query_data(noun, seed_device, seed_timeout, strip=False, default=None,
 
     if b64:
         try:
-            return base64.b64decode(resp)
-        except TypeError:
+            return util.b64d(resp)
+        # Bogus input produces different errors in Python 2 and 3; catch both.
+        except (TypeError, binascii.Error):
             LOG.warn("Failed base64 decoding key '%s'", noun)
             return resp
 
@@ -358,30 +410,17 @@ def query_data(noun, seed_device, seed_timeout, strip=False, default=None,
 
 
 def dmi_data():
-    sys_uuid, sys_type = None, None
-    dmidecode_path = util.which('dmidecode')
-    if not dmidecode_path:
-        return False
+    sys_uuid = util.read_dmi_data("system-uuid")
+    sys_type = util.read_dmi_data("system-product-name")
 
-    sys_uuid_cmd = [dmidecode_path, "-s", "system-uuid"]
-    try:
-        LOG.debug("Getting hostname from dmidecode")
-        (sys_uuid, _err) = util.subp(sys_uuid_cmd)
-    except Exception as e:
-        util.logexc(LOG, "Failed to get system UUID", e)
+    if not sys_uuid or not sys_type:
+        return None
 
-    sys_type_cmd = [dmidecode_path, "-s", "system-product-name"]
-    try:
-        LOG.debug("Determining hypervisor product name via dmidecode")
-        (sys_type, _err) = util.subp(sys_type_cmd)
-    except Exception as e:
-        util.logexc(LOG, "Failed to get system UUID", e)
-
-    return (sys_uuid.lower().strip(), sys_type.strip())
+    return (sys_uuid.lower(), sys_type)
 
 
 def write_boot_content(content, content_f, link=None, shebang=False,
-                       mode=0400):
+                       mode=0o400):
     """
     Write the content to content_f. Under the following rules:
         1. If no content, remove the file

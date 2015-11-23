@@ -22,15 +22,32 @@
 #   return responses.
 #
 
-import base64
-from cloudinit import helpers as c_helpers
-from cloudinit.sources import DataSourceSmartOS
-from .. import helpers
+from __future__ import print_function
+
 import os
 import os.path
 import re
+import shutil
 import stat
+import tempfile
 import uuid
+from binascii import crc32
+
+import serial
+import six
+
+import six
+
+from cloudinit import helpers as c_helpers
+from cloudinit.sources import DataSourceSmartOS
+from cloudinit.util import b64e
+
+from .. import helpers
+
+try:
+    from unittest import mock
+except ImportError:
+    import mock
 
 MOCK_RETURNS = {
     'hostname': 'test-host',
@@ -49,69 +66,25 @@ MOCK_RETURNS = {
 DMI_DATA_RETURN = (str(uuid.uuid4()), 'smartdc')
 
 
-class MockSerial(object):
-    """Fake a serial terminal for testing the code that
-        interfaces with the serial"""
+def get_mock_client(mockdata):
+    class MockMetadataClient(object):
 
-    port = None
+        def __init__(self, serial):
+            pass
 
-    def __init__(self, mockdata):
-        self.last = None
-        self.last = None
-        self.new = True
-        self.count = 0
-        self.mocked_out = []
-        self.mockdata = mockdata
-
-    def open(self):
-        return True
-
-    def close(self):
-        return True
-
-    def isOpen(self):
-        return True
-
-    def write(self, line):
-        line = line.replace('GET ', '')
-        self.last = line.rstrip()
-
-    def readline(self):
-        if self.new:
-            self.new = False
-            if self.last in self.mockdata:
-                return 'SUCCESS\n'
-            else:
-                return 'NOTFOUND %s\n' % self.last
-
-        if self.last in self.mockdata:
-            if not self.mocked_out:
-                self.mocked_out = [x for x in self._format_out()]
-
-            if len(self.mocked_out) > self.count:
-                self.count += 1
-                return self.mocked_out[self.count - 1]
-
-    def _format_out(self):
-        if self.last in self.mockdata:
-            _mret = self.mockdata[self.last]
-            try:
-                for l in _mret.splitlines():
-                    yield "%s\n" % l.rstrip()
-            except:
-                yield "%s\n" % _mret.rstrip()
-
-            yield '.'
-            yield '\n'
+        def get_metadata(self, metadata_key):
+            return mockdata.get(metadata_key)
+    return MockMetadataClient
 
 
 class TestSmartOSDataSource(helpers.FilesystemMockingTestCase):
     def setUp(self):
-        helpers.FilesystemMockingTestCase.setUp(self)
+        super(TestSmartOSDataSource, self).setUp()
 
-        # makeDir comes from MockerTestCase
-        self.tmp = self.makeDir()
-        self.legacy_user_d = self.makeDir()
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp)
+        self.legacy_user_d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.legacy_user_d)
 
         # If you should want to watch the logs...
         self._log = None
@@ -149,9 +122,6 @@ class TestSmartOSDataSource(helpers.FilesystemMockingTestCase):
         if dmi_data is None:
             dmi_data = DMI_DATA_RETURN
 
-        def _get_serial(*_):
-            return MockSerial(mockdata)
-
         def _dmi_data():
             return dmi_data
 
@@ -168,7 +138,9 @@ class TestSmartOSDataSource(helpers.FilesystemMockingTestCase):
             sys_cfg['datasource']['SmartOS'] = ds_cfg
 
         self.apply_patches([(mod, 'LEGACY_USER_D', self.legacy_user_d)])
-        self.apply_patches([(mod, 'get_serial', _get_serial)])
+        self.apply_patches([(mod, 'get_serial', mock.MagicMock())])
+        self.apply_patches([
+            (mod, 'JoyentMetadataClient', get_mock_client(mockdata))])
         self.apply_patches([(mod, 'dmi_data', _dmi_data)])
         self.apply_patches([(os, 'uname', _os_uname)])
         self.apply_patches([(mod, 'device_exists', lambda d: True)])
@@ -227,7 +199,7 @@ class TestSmartOSDataSource(helpers.FilesystemMockingTestCase):
         my_returns = MOCK_RETURNS.copy()
         my_returns['base64_all'] = "true"
         for k in ('hostname', 'cloud-init:user-data'):
-            my_returns[k] = base64.b64encode(my_returns[k])
+            my_returns[k] = b64e(my_returns[k])
 
         dsrc = self._get_ds(mockdata=my_returns)
         ret = dsrc.get_data()
@@ -248,7 +220,7 @@ class TestSmartOSDataSource(helpers.FilesystemMockingTestCase):
         my_returns['b64-cloud-init:user-data'] = "true"
         my_returns['b64-hostname'] = "true"
         for k in ('hostname', 'cloud-init:user-data'):
-            my_returns[k] = base64.b64encode(my_returns[k])
+            my_returns[k] = b64e(my_returns[k])
 
         dsrc = self._get_ds(mockdata=my_returns)
         ret = dsrc.get_data()
@@ -264,7 +236,7 @@ class TestSmartOSDataSource(helpers.FilesystemMockingTestCase):
         my_returns = MOCK_RETURNS.copy()
         my_returns['base64_keys'] = 'hostname,ignored'
         for k in ('hostname',):
-            my_returns[k] = base64.b64encode(my_returns[k])
+            my_returns[k] = b64e(my_returns[k])
 
         dsrc = self._get_ds(mockdata=my_returns)
         ret = dsrc.get_data()
@@ -342,8 +314,8 @@ class TestSmartOSDataSource(helpers.FilesystemMockingTestCase):
         """
             User-data in the SmartOS world is supposed to be written to a file
             each and every boot. This tests to make sure that in the event the
-            legacy user-data is removed, the existing user-data is backed-up and
-            there is no /var/db/user-data left.
+            legacy user-data is removed, the existing user-data is backed-up
+            and there is no /var/db/user-data left.
         """
 
         user_data_f = "%s/mdata-user-data" % self.legacy_user_d
@@ -365,7 +337,7 @@ class TestSmartOSDataSource(helpers.FilesystemMockingTestCase):
                 permissions = oct(os.stat(name_f)[stat.ST_MODE])[-3:]
                 if re.match(r'.*\/mdata-user-data$', name_f):
                     found_new = True
-                    print name_f
+                    print(name_f)
                     self.assertEquals(permissions, '400')
 
         self.assertFalse(found_new)
@@ -437,6 +409,18 @@ class TestSmartOSDataSource(helpers.FilesystemMockingTestCase):
         self.assertEqual(dsrc.device_name_to_device('FOO'),
                          mydscfg['disk_aliases']['FOO'])
 
+    @mock.patch('cloudinit.sources.DataSourceSmartOS.JoyentMetadataClient')
+    @mock.patch('cloudinit.sources.DataSourceSmartOS.get_serial')
+    def test_serial_console_closed_on_error(self, get_serial, metadata_client):
+        class OurException(Exception):
+            pass
+        metadata_client.side_effect = OurException
+        try:
+            DataSourceSmartOS.query_data('noun', 'device', 0)
+        except OurException:
+            pass
+        self.assertEqual(1, get_serial.return_value.close.call_count)
+
 
 def apply_patches(patches):
     ret = []
@@ -447,3 +431,133 @@ def apply_patches(patches):
         setattr(ref, name, replace)
         ret.append((ref, name, orig))
     return ret
+
+
+class TestJoyentMetadataClient(helpers.FilesystemMockingTestCase):
+
+    def setUp(self):
+        super(TestJoyentMetadataClient, self).setUp()
+        self.serial = mock.MagicMock(spec=serial.Serial)
+        self.request_id = 0xabcdef12
+        self.metadata_value = 'value'
+        self.response_parts = {
+            'command': 'SUCCESS',
+            'crc': 'b5a9ff00',
+            'length': 17 + len(b64e(self.metadata_value)),
+            'payload': b64e(self.metadata_value),
+            'request_id': '{0:08x}'.format(self.request_id),
+        }
+
+        def make_response():
+            payload = ''
+            if self.response_parts['payload']:
+                payload = ' {0}'.format(self.response_parts['payload'])
+            del self.response_parts['payload']
+            return (
+                'V2 {length} {crc} {request_id} {command}{payload}\n'.format(
+                    payload=payload, **self.response_parts).encode('ascii'))
+        self.serial.readline.side_effect = make_response
+        self.patched_funcs.enter_context(
+            mock.patch('cloudinit.sources.DataSourceSmartOS.random.randint',
+                       mock.Mock(return_value=self.request_id)))
+
+    def _get_client(self):
+        return DataSourceSmartOS.JoyentMetadataClient(self.serial)
+
+    def assertEndsWith(self, haystack, prefix):
+        self.assertTrue(haystack.endswith(prefix),
+                        "{0} does not end with '{1}'".format(
+                            repr(haystack), prefix))
+
+    def assertStartsWith(self, haystack, prefix):
+        self.assertTrue(haystack.startswith(prefix),
+                        "{0} does not start with '{1}'".format(
+                            repr(haystack), prefix))
+
+    def test_get_metadata_writes_a_single_line(self):
+        client = self._get_client()
+        client.get_metadata('some_key')
+        self.assertEqual(1, self.serial.write.call_count)
+        written_line = self.serial.write.call_args[0][0]
+        self.assertEndsWith(written_line, b'\n')
+        self.assertEqual(1, written_line.count(b'\n'))
+
+    def _get_written_line(self, key='some_key'):
+        client = self._get_client()
+        client.get_metadata(key)
+        return self.serial.write.call_args[0][0]
+
+    def test_get_metadata_writes_bytes(self):
+        self.assertIsInstance(self._get_written_line(), six.binary_type)
+
+    def test_get_metadata_line_starts_with_v2(self):
+        self.assertStartsWith(self._get_written_line(), b'V2')
+
+    def test_get_metadata_uses_get_command(self):
+        parts = self._get_written_line().decode('ascii').strip().split(' ')
+        self.assertEqual('GET', parts[4])
+
+    def test_get_metadata_base64_encodes_argument(self):
+        key = 'my_key'
+        parts = self._get_written_line(key).decode('ascii').strip().split(' ')
+        self.assertEqual(b64e(key), parts[5])
+
+    def test_get_metadata_calculates_length_correctly(self):
+        parts = self._get_written_line().decode('ascii').strip().split(' ')
+        expected_length = len(' '.join(parts[3:]))
+        self.assertEqual(expected_length, int(parts[1]))
+
+    def test_get_metadata_uses_appropriate_request_id(self):
+        parts = self._get_written_line().decode('ascii').strip().split(' ')
+        request_id = parts[3]
+        self.assertEqual(8, len(request_id))
+        self.assertEqual(request_id, request_id.lower())
+
+    def test_get_metadata_uses_random_number_for_request_id(self):
+        line = self._get_written_line()
+        request_id = line.decode('ascii').strip().split(' ')[3]
+        self.assertEqual('{0:08x}'.format(self.request_id), request_id)
+
+    def test_get_metadata_checksums_correctly(self):
+        parts = self._get_written_line().decode('ascii').strip().split(' ')
+        expected_checksum = '{0:08x}'.format(
+            crc32(' '.join(parts[3:]).encode('utf-8')) & 0xffffffff)
+        checksum = parts[2]
+        self.assertEqual(expected_checksum, checksum)
+
+    def test_get_metadata_reads_a_line(self):
+        client = self._get_client()
+        client.get_metadata('some_key')
+        self.assertEqual(1, self.serial.readline.call_count)
+
+    def test_get_metadata_returns_valid_value(self):
+        client = self._get_client()
+        value = client.get_metadata('some_key')
+        self.assertEqual(self.metadata_value, value)
+
+    def test_get_metadata_throws_exception_for_incorrect_length(self):
+        self.response_parts['length'] = 0
+        client = self._get_client()
+        self.assertRaises(DataSourceSmartOS.JoyentMetadataFetchException,
+                          client.get_metadata, 'some_key')
+
+    def test_get_metadata_throws_exception_for_incorrect_crc(self):
+        self.response_parts['crc'] = 'deadbeef'
+        client = self._get_client()
+        self.assertRaises(DataSourceSmartOS.JoyentMetadataFetchException,
+                          client.get_metadata, 'some_key')
+
+    def test_get_metadata_throws_exception_for_request_id_mismatch(self):
+        self.response_parts['request_id'] = 'deadbeef'
+        client = self._get_client()
+        client._checksum = lambda _: self.response_parts['crc']
+        self.assertRaises(DataSourceSmartOS.JoyentMetadataFetchException,
+                          client.get_metadata, 'some_key')
+
+    def test_get_metadata_returns_None_if_value_not_found(self):
+        self.response_parts['payload'] = ''
+        self.response_parts['command'] = 'NOTFOUND'
+        self.response_parts['length'] = 17
+        client = self._get_client()
+        client._checksum = lambda _: self.response_parts['crc']
+        self.assertIsNone(client.get_metadata('some_key'))

@@ -51,6 +51,10 @@ EXPORT_GPG_KEYID = """
 
 
 def handle(name, cfg, cloud, log, _args):
+    if util.is_false(cfg.get('apt_configure_enabled', True)):
+        log.debug("Skipping module named %s, disabled by config.", name)
+        return
+
     release = get_release()
     mirrors = find_apt_mirror_info(cloud, cfg)
     if not mirrors or "primary" not in mirrors:
@@ -126,7 +130,7 @@ def mirror2lists_fileprefix(mirror):
 
 
 def rename_apt_lists(old_mirrors, new_mirrors, lists_d="/var/lib/apt/lists"):
-    for (name, omirror) in old_mirrors.iteritems():
+    for (name, omirror) in old_mirrors.items():
         nmirror = new_mirrors.get(name)
         if not nmirror:
             continue
