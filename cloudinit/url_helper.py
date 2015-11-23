@@ -20,21 +20,29 @@
 #    You should have received a copy of the GNU General Public License
 #    along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-import httplib
 import time
-import urllib
+
+import six
 
 import requests
 from requests import exceptions
 
-from urlparse import (urlparse, urlunparse)
+from six.moves.urllib.parse import (
+    urlparse, urlunparse,
+    quote as urlquote)
 
 from cloudinit import log as logging
 from cloudinit import version
 
 LOG = logging.getLogger(__name__)
 
-NOT_FOUND = httplib.NOT_FOUND
+if six.PY2:
+    import httplib
+    NOT_FOUND = httplib.NOT_FOUND
+else:
+    import http.client
+    NOT_FOUND = http.client.NOT_FOUND
+
 
 # Check if requests has ssl support (added in requests >= 0.8.8)
 SSL_ENABLED = False
@@ -70,7 +78,7 @@ def combine_url(base, *add_ons):
         path = url_parsed[2]
         if path and not path.endswith("/"):
             path += "/"
-        path += urllib.quote(str(add_on), safe="/:")
+        path += urlquote(str(add_on), safe="/:")
         url_parsed[2] = path
         return urlunparse(url_parsed)
 
@@ -135,7 +143,7 @@ class UrlResponse(object):
         return self._response.status_code
 
     def __str__(self):
-        return self.contents
+        return self._response.text
 
 
 class UrlError(IOError):
@@ -313,7 +321,7 @@ def wait_for_url(urls, max_wait=None, timeout=None,
                     timeout = int((start_time + max_wait) - now)
 
             reason = ""
-            e = None
+            url_exc = None
             try:
                 if headers_cb is not None:
                     headers = headers_cb(url)
@@ -324,18 +332,20 @@ def wait_for_url(urls, max_wait=None, timeout=None,
                                    check_status=False)
                 if not response.contents:
                     reason = "empty response [%s]" % (response.code)
-                    e = UrlError(ValueError(reason),
-                                 code=response.code, headers=response.headers)
+                    url_exc = UrlError(ValueError(reason), code=response.code,
+                                       headers=response.headers)
                 elif not response.ok():
                     reason = "bad status code [%s]" % (response.code)
-                    e = UrlError(ValueError(reason),
-                                 code=response.code, headers=response.headers)
+                    url_exc = UrlError(ValueError(reason), code=response.code,
+                                       headers=response.headers)
                 else:
                     return url
             except UrlError as e:
                 reason = "request error [%s]" % e
+                url_exc = e
             except Exception as e:
                 reason = "unexpected error [%s]" % e
+                url_exc = e
 
             time_taken = int(time.time() - start_time)
             status_msg = "Calling '%s' failed [%s/%ss]: %s" % (url,
@@ -347,7 +357,7 @@ def wait_for_url(urls, max_wait=None, timeout=None,
                 # This can be used to alter the headers that will be sent
                 # in the future, for example this is what the MAAS datasource
                 # does.
-                exception_cb(msg=status_msg, exception=e)
+                exception_cb(msg=status_msg, exception=url_exc)
 
         if timeup(max_wait, start_time):
             break
