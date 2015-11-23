@@ -27,6 +27,7 @@ from six import StringIO
 import abc
 import os
 import re
+import stat
 
 from cloudinit import importer
 from cloudinit import log as logging
@@ -89,6 +90,13 @@ class Distro(object):
         self._write_hostname(writeable_hostname, self.hostname_conf_fn)
         self._apply_hostname(writeable_hostname)
 
+    def uses_systemd(self):
+        try:
+            res = os.lstat('/run/systemd/system')
+            return stat.S_ISDIR(res.st_mode)
+        except:
+            return False
+
     @abc.abstractmethod
     def package_command(self, cmd, args=None, pkgs=None):
         raise NotImplementedError()
@@ -109,12 +117,11 @@ class Distro(object):
             arch = self.get_primary_arch()
         return _get_arch_package_mirror_info(mirror_info, arch)
 
-    def get_package_mirror_info(self, arch=None,
-                                availability_zone=None):
+    def get_package_mirror_info(self, arch=None, data_source=None):
         # This resolves the package_mirrors config option
         # down to a single dict of {mirror_name: mirror_url}
         arch_info = self._get_arch_package_mirror_info(arch)
-        return _get_package_mirror_info(availability_zone=availability_zone,
+        return _get_package_mirror_info(data_source=data_source,
                                         mirror_info=arch_info)
 
     def apply_network(self, settings, bring_up=True):
@@ -208,6 +215,15 @@ class Distro(object):
                                   and sys_hostname != hostname):
             update_files.append(sys_fn)
 
+        # If something else has changed the hostname after we set it
+        # initially, we should not overwrite those changes (we should
+        # only be setting the hostname once per instance)
+        if (sys_hostname and prev_hostname and
+                sys_hostname != prev_hostname):
+            LOG.info("%s differs from %s, assuming user maintained hostname.",
+                       prev_hostname_fn, sys_fn)
+            return
+
         # Remove duplicates (incase the previous config filename)
         # is the same as the system config filename, don't bother
         # doing it twice
@@ -221,11 +237,6 @@ class Distro(object):
             except IOError:
                 util.logexc(LOG, "Failed to write hostname %s to %s", hostname,
                             fn)
-
-        if (sys_hostname and prev_hostname and
-                sys_hostname != prev_hostname):
-            LOG.debug("%s differs from %s, assuming user maintained hostname.",
-                       prev_hostname_fn, sys_fn)
 
         # If the system hostname file name was provided set the
         # non-fqdn as the transient hostname.
@@ -318,6 +329,7 @@ class Distro(object):
             "gecos": '--comment',
             "homedir": '--home',
             "primary_group": '--gid',
+            "uid": '--uid',
             "groups": '--groups',
             "passwd": '--password',
             "shell": '--shell',
@@ -543,7 +555,7 @@ class Distro(object):
                 LOG.info("Added user '%s' to group '%s'" % (member, name))
 
 
-def _get_package_mirror_info(mirror_info, availability_zone=None,
+def _get_package_mirror_info(mirror_info, data_source=None,
                              mirror_filter=util.search_for_mirror):
     # given a arch specific 'mirror_info' entry (from package_mirrors)
     # search through the 'search' entries, and fallback appropriately
@@ -551,15 +563,22 @@ def _get_package_mirror_info(mirror_info, availability_zone=None,
     if not mirror_info:
         mirror_info = {}
 
-    ec2_az_re = ("^[a-z][a-z]-(%s)-[1-9][0-9]*[a-z]$" %
-        "north|northeast|east|southeast|south|southwest|west|northwest")
+    # ec2 availability zones are named cc-direction-[0-9][a-d] (us-east-1b)
+    # the region is us-east-1. so region = az[0:-1]
+    directions_re = '|'.join([
+        'central', 'east', 'north', 'northeast', 'northwest',
+        'south', 'southeast', 'southwest', 'west'])
+    ec2_az_re = ("^[a-z][a-z]-(%s)-[1-9][0-9]*[a-z]$" % directions_re)
 
     subst = {}
-    if availability_zone:
-        subst['availability_zone'] = availability_zone
+    if data_source and data_source.availability_zone:
+        subst['availability_zone'] = data_source.availability_zone
 
-    if availability_zone and re.match(ec2_az_re, availability_zone):
-        subst['ec2_region'] = "%s" % availability_zone[0:-1]
+        if re.match(ec2_az_re, data_source.availability_zone):
+            subst['ec2_region'] = "%s" % data_source.availability_zone[0:-1]
+
+    if data_source and data_source.region:
+        subst['region'] = data_source.region
 
     results = {}
     for (name, mirror) in mirror_info.get('failsafe', {}).items():

@@ -766,10 +766,6 @@ def fetch_ssl_details(paths=None):
     return ssl_details
 
 
-def load_tfile_or_url(*args, **kwargs):
-    return(decode_binary(read_file_or_url(*args, **kwargs).contents))
-
-
 def read_file_or_url(url, timeout=5, retries=10,
                      headers=None, data=None, sec_between=1, ssl_details=None,
                      headers_cb=None, exception_cb=None):
@@ -786,7 +782,8 @@ def read_file_or_url(url, timeout=5, retries=10,
             code = e.errno
             if e.errno == errno.ENOENT:
                 code = url_helper.NOT_FOUND
-            raise url_helper.UrlError(cause=e, code=code, headers=None)
+            raise url_helper.UrlError(cause=e, code=code, headers=None,
+                                      url=url)
         return url_helper.FileResponse(file_path, contents=contents)
     else:
         return url_helper.readurl(url,
@@ -837,10 +834,10 @@ def read_seeded(base="", ext="", timeout=5, retries=10, file_retries=0):
         ud_url = "%s%s%s" % (base, "user-data", ext)
         md_url = "%s%s%s" % (base, "meta-data", ext)
 
-    md_resp = load_tfile_or_url(md_url, timeout, retries, file_retries)
+    md_resp = read_file_or_url(md_url, timeout, retries, file_retries)
     md = None
     if md_resp.ok():
-        md = load_yaml(md_resp.contents, default={})
+        md = load_yaml(decode_binary(md_resp.contents), default={})
 
     ud_resp = read_file_or_url(ud_url, timeout, retries, file_retries)
     ud = None
@@ -1483,8 +1480,8 @@ def mount_cb(device, callback, data=None, rw=False, mtype=None, sync=True):
     mounted = mounts()
     with tempdir() as tmpd:
         umount = False
-        if device in mounted:
-            mountpoint = mounted[device]['mountpoint']
+        if os.path.realpath(device) in mounted:
+            mountpoint = mounted[os.path.realpath(device)]['mountpoint']
         else:
             failure_reason = None
             for mtype in mtypes:
@@ -2149,7 +2146,7 @@ def _read_dmi_syspath(key):
         return key_data.strip()
 
     except Exception as e:
-        logexc(LOG, "failed read of %s", dmi_key_path, e)
+        logexc(LOG, "failed read of %s", dmi_key_path)
         return None
 
 

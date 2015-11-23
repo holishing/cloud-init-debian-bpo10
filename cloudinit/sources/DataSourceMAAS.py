@@ -20,13 +20,9 @@
 
 from __future__ import print_function
 
-from email.utils import parsedate
 import errno
-import oauthlib.oauth1 as oauth1
 import os
 import time
-
-from six.moves.urllib_request import Request, urlopen
 
 from cloudinit import log as logging
 from cloudinit import sources
@@ -52,7 +48,20 @@ class DataSourceMAAS(sources.DataSource):
         sources.DataSource.__init__(self, sys_cfg, distro, paths)
         self.base_url = None
         self.seed_dir = os.path.join(paths.seed_dir, 'maas')
-        self.oauth_clockskew = None
+        self.oauth_helper = self._get_helper()
+
+    def _get_helper(self):
+        mcfg = self.ds_cfg
+        # If we are missing token_key, token_secret or consumer_key
+        # then just do non-authed requests
+        for required in ('token_key', 'token_secret', 'consumer_key'):
+            if required not in mcfg:
+                return url_helper.OauthUrlHelper()
+
+        return url_helper.OauthUrlHelper(
+            consumer_key=mcfg['consumer_key'], token_key=mcfg['token_key'],
+            token_secret=mcfg['token_secret'],
+            consumer_secret=mcfg.get('consumer_secret'))
 
     def __str__(self):
         root = sources.DataSource.__str__(self)
@@ -79,14 +88,18 @@ class DataSourceMAAS(sources.DataSource):
             return False
 
         try:
+            # doing this here actually has a side affect of
+            # getting oauth time-fix in place.  As no where else would
+            # retry by default, so even if we could fix the timestamp
+            # we would not.
             if not self.wait_for_metadata_service(url):
                 return False
 
             self.base_url = url
 
-            (userdata, metadata) = read_maas_seed_url(self.base_url,
-                                                      self._md_headers,
-                                                      paths=self.paths)
+            (userdata, metadata) = read_maas_seed_url(
+                self.base_url, read_file_or_url=self.oauth_helper.readurl,
+                paths=self.paths, retries=1)
             self.userdata_raw = userdata
             self.metadata = metadata
             return True
@@ -94,31 +107,8 @@ class DataSourceMAAS(sources.DataSource):
             util.logexc(LOG, "Failed fetching metadata from url %s", url)
             return False
 
-    def _md_headers(self, url):
-        mcfg = self.ds_cfg
-
-        # If we are missing token_key, token_secret or consumer_key
-        # then just do non-authed requests
-        for required in ('token_key', 'token_secret', 'consumer_key'):
-            if required not in mcfg:
-                return {}
-
-        consumer_secret = mcfg.get('consumer_secret', "")
-
-        timestamp = None
-        if self.oauth_clockskew:
-            timestamp = int(time.time()) + self.oauth_clockskew
-
-        return oauth_headers(url=url,
-                             consumer_key=mcfg['consumer_key'],
-                             token_key=mcfg['token_key'],
-                             token_secret=mcfg['token_secret'],
-                             consumer_secret=consumer_secret,
-                             timestamp=timestamp)
-
     def wait_for_metadata_service(self, url):
         mcfg = self.ds_cfg
-
         max_wait = 120
         try:
             max_wait = int(mcfg.get("max_wait", max_wait))
@@ -138,10 +128,8 @@ class DataSourceMAAS(sources.DataSource):
         starttime = time.time()
         check_url = "%s/%s/meta-data/instance-id" % (url, MD_VERSION)
         urls = [check_url]
-        url = url_helper.wait_for_url(urls=urls, max_wait=max_wait,
-                                      timeout=timeout,
-                                      exception_cb=self._except_cb,
-                                      headers_cb=self._md_headers)
+        url = self.oauth_helper.wait_for_url(
+            urls=urls, max_wait=max_wait, timeout=timeout)
 
         if url:
             LOG.debug("Using metadata source: '%s'", url)
@@ -150,26 +138,6 @@ class DataSourceMAAS(sources.DataSource):
                          urls, int(time.time() - starttime))
 
         return bool(url)
-
-    def _except_cb(self, msg, exception):
-        if not (isinstance(exception, url_helper.UrlError) and
-                (exception.code == 403 or exception.code == 401)):
-            return
-
-        if 'date' not in exception.headers:
-            LOG.warn("Missing header 'date' in %s response", exception.code)
-            return
-
-        date = exception.headers['date']
-        try:
-            ret_time = time.mktime(parsedate(date))
-        except Exception as e:
-            LOG.warn("Failed to convert datetime '%s': %s", date, e)
-            return
-
-        self.oauth_clockskew = int(ret_time - time.time())
-        LOG.warn("Setting oauth clockskew to %d", self.oauth_clockskew)
-        return
 
 
 def read_maas_seed_dir(seed_d):
@@ -196,12 +164,12 @@ def read_maas_seed_dir(seed_d):
     return check_seed_contents(md, seed_d)
 
 
-def read_maas_seed_url(seed_url, header_cb=None, timeout=None,
-                       version=MD_VERSION, paths=None):
+def read_maas_seed_url(seed_url, read_file_or_url=None, timeout=None,
+                       version=MD_VERSION, paths=None, retries=None):
     """
     Read the maas datasource at seed_url.
-      - header_cb is a method that should return a headers dictionary for
-        a given url
+      read_file_or_url is a method that should provide an interface
+      like util.read_file_or_url
 
     Expected format of seed_url is are the following files:
       * <seed_url>/<version>/meta-data/instance-id
@@ -222,25 +190,21 @@ def read_maas_seed_url(seed_url, header_cb=None, timeout=None,
         'user-data': "%s/%s" % (base_url, 'user-data'),
     }
 
+    if read_file_or_url is None:
+        read_file_or_url = util.read_file_or_url
+
     md = {}
     for name in file_order:
         url = files.get(name)
-        if not header_cb:
-            def _cb(url):
-                return {}
-            header_cb = _cb
-
         if name == 'user-data':
-            retries = 0
+            item_retries = 0
         else:
-            retries = None
+            item_retries = retries
 
         try:
             ssl_details = util.fetch_ssl_details(paths)
-            resp = util.read_file_or_url(url, retries=retries,
-                                         headers_cb=header_cb,
-                                         timeout=timeout,
-                                         ssl_details=ssl_details)
+            resp = read_file_or_url(url, retries=item_retries,
+                                    timeout=timeout, ssl_details=ssl_details)
             if resp.ok():
                 if name in BINARY_FIELDS:
                     md[name] = resp.contents
@@ -278,24 +242,6 @@ def check_seed_contents(content, seed):
         md[key] = val
 
     return (userdata, md)
-
-
-def oauth_headers(url, consumer_key, token_key, token_secret, consumer_secret,
-                  timestamp=None):
-    if timestamp:
-        timestamp = str(timestamp)
-    else:
-        timestamp = None
-
-    client = oauth1.Client(
-        consumer_key,
-        client_secret=consumer_secret,
-        resource_owner_key=token_key,
-        resource_owner_secret=token_secret,
-        signature_method=oauth1.SIGNATURE_PLAINTEXT,
-        timestamp=timestamp)
-    uri, signed_headers, body = client.sign(url)
-    return signed_headers
 
 
 class MAASSeedDirNone(Exception):
@@ -361,47 +307,46 @@ if __name__ == "__main__":
                 if key in cfg and creds[key] is None:
                     creds[key] = cfg[key]
 
-        def geturl(url, headers_cb):
-            req = Request(url, data=None, headers=headers_cb(url))
-            return urlopen(req).read()
+        oauth_helper = url_helper.OauthUrlHelper(**creds)
 
-        def printurl(url, headers_cb):
-            print("== %s ==\n%s\n" % (url, geturl(url, headers_cb)))
+        def geturl(url):
+            # the retry is to ensure that oauth timestamp gets fixed
+            return oauth_helper.readurl(url, retries=1).contents
 
-        def crawl(url, headers_cb=None):
+        def printurl(url):
+            print("== %s ==\n%s\n" % (url, geturl(url).decode()))
+
+        def crawl(url):
             if url.endswith("/"):
-                for line in geturl(url, headers_cb).splitlines():
+                for line in geturl(url).decode().splitlines():
                     if line.endswith("/"):
-                        crawl("%s%s" % (url, line), headers_cb)
+                        crawl("%s%s" % (url, line))
+                    elif line == "meta-data":
+                        # meta-data is a dir, it *should* end in a /
+                        crawl("%s%s" % (url, "meta-data/"))
                     else:
-                        printurl("%s%s" % (url, line), headers_cb)
+                        printurl("%s%s" % (url, line))
             else:
-                printurl(url, headers_cb)
-
-        def my_headers(url):
-            headers = {}
-            if creds.get('consumer_key', None) is not None:
-                headers = oauth_headers(url, **creds)
-            return headers
+                printurl(url)
 
         if args.subcmd == "check-seed":
-            if args.url.startswith("http"):
-                (userdata, metadata) = read_maas_seed_url(args.url,
-                                                          header_cb=my_headers,
-                                                          version=args.apiver)
-            else:
-                (userdata, metadata) = read_maas_seed_url(args.url)
+            readurl = oauth_helper.readurl
+            if args.url[0] == "/" or args.url.startswith("file://"):
+                readurl = None
+            (userdata, metadata) = read_maas_seed_url(
+                args.url, version=args.apiver, read_file_or_url=readurl,
+                retries=2)
             print("=== userdata ===")
-            print(userdata)
+            print(userdata.decode())
             print("=== metadata ===")
             pprint.pprint(metadata)
 
         elif args.subcmd == "get":
-            printurl(args.url, my_headers)
+            printurl(args.url)
 
         elif args.subcmd == "crawl":
             if not args.url.endswith("/"):
                 args.url = "%s/" % args.url
-            crawl(args.url, my_headers)
+            crawl(args.url)
 
     main()

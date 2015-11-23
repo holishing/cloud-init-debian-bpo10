@@ -32,6 +32,7 @@ from cloudinit import user_data as ud
 from cloudinit import util
 
 from cloudinit.filters import launch_index
+from cloudinit.reporting import events
 
 DEP_FILESYSTEM = "FILESYSTEM"
 DEP_NETWORK = "NETWORK"
@@ -157,6 +158,10 @@ class DataSource(object):
         return self.metadata.get('availability-zone',
                                  self.metadata.get('availability_zone'))
 
+    @property
+    def region(self):
+        return self.metadata.get('region')
+
     def get_instance_id(self):
         if not self.metadata or 'instance-id' not in self.metadata:
             # Return a magic not really instance id string
@@ -210,8 +215,7 @@ class DataSource(object):
             return hostname
 
     def get_package_mirror_info(self):
-        return self.distro.get_package_mirror_info(
-            availability_zone=self.availability_zone)
+        return self.distro.get_package_mirror_info(data_source=self)
 
 
 def normalize_pubkey_data(pubkey_data):
@@ -243,17 +247,25 @@ def normalize_pubkey_data(pubkey_data):
     return keys
 
 
-def find_source(sys_cfg, distro, paths, ds_deps, cfg_list, pkg_list):
+def find_source(sys_cfg, distro, paths, ds_deps, cfg_list, pkg_list, reporter):
     ds_list = list_sources(cfg_list, ds_deps, pkg_list)
     ds_names = [type_utils.obj_name(f) for f in ds_list]
-    LOG.debug("Searching for data source in: %s", ds_names)
+    mode = "network" if DEP_NETWORK in ds_deps else "local"
+    LOG.debug("Searching for %s data source in: %s", mode, ds_names)
 
-    for cls in ds_list:
+    for name, cls in zip(ds_names, ds_list):
+        myrep = events.ReportEventStack(
+            name="search-%s" % name.replace("DataSource", ""),
+            description="searching for %s data from %s" % (mode, name),
+            message="no %s data found from %s" % (mode, name),
+            parent=reporter)
         try:
-            LOG.debug("Seeing if we can get any data from %s", cls)
-            s = cls(sys_cfg, distro, paths)
-            if s.get_data():
-                return (s, type_utils.obj_name(cls))
+            with myrep:
+                LOG.debug("Seeing if we can get any data from %s", cls)
+                s = cls(sys_cfg, distro, paths)
+                if s.get_data():
+                    myrep.message = "found %s data from %s" % (mode, name)
+                    return (s, type_utils.obj_name(cls))
         except Exception:
             util.logexc(LOG, "Getting data from %s failed", cls)
 
