@@ -1,7 +1,10 @@
 #!/usr/bin/make -f
 
+INIT_SYSTEM ?= upstart,systemd
+export PYBUILD_INSTALL_ARGS=--init-system=$(INIT_SYSTEM)
+
 %:
-	dh $@ --with python2 --buildsystem=python_distutils
+	dh $@ --with python3,systemd --buildsystem=pybuild
 
 override_dh_install:
 	dh_install
@@ -9,8 +12,11 @@ override_dh_install:
 
 ifeq (,$(findstring nocheck, $(DEB_BUILD_OPTIONS)))
 override_dh_auto_test:
-	dh_auto_test
-	$(MAKE) test
+	# Because setup tools didn't copy data...
+	[ ! -d .pybuild/pythonX.Y_?.?/build/tests ] || cp -r tests/data .pybuild/pythonX.Y_?.?/build/tests
+	# We set http_proxy because of httpretty issue 122 trunk has worked
+	# around that but to support cloud-init that has not.
+	http_proxy= dh_auto_test -- --test-nose
 endif
 
 override_dh_installinit:
@@ -18,3 +24,6 @@ override_dh_installinit:
 	dh_installinit --no-start --no-restart-on-upgrade
 	dh_installinit --no-start --no-restart-on-upgrade --name cloud-config
 	dh_installinit --no-start --no-restart-on-upgrade --name cloud-final
+
+override_dh_systemd_start:
+	dh_systemd_start --no-restart-on-upgrade --no-start
