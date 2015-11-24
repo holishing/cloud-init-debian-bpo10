@@ -5,6 +5,7 @@ cloud-init (0.7.7~bzr1156-1) UNRELEASED; urgency=medium
   * Import some of the changes from ../config/cloud.cfg.
   * Add security mirror.
     Thanks to Brandon Bradley <bradleytastic@gmail.com> (Closes: #783847)
+  * Use upstream systemd units (Closes: #784083).
 
  -- Charles Plessy <plessy@debian.org>  Mon, 23 Nov 2015 15:16:51 +0900
 
