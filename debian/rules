@@ -11,7 +11,7 @@ override_dh_install:
 	rm -rf debian/cloud-init/usr/lib/python?.?/dist-packages/tests
 
 override_dh_auto_install:
-	dh_auto_install -- --init-system=systemd,upstart
+	dh_auto_install -- --init-system=systemd,sysvinit_deb,upstart
 
 ifeq (,$(findstring nocheck, $(DEB_BUILD_OPTIONS)))
 override_dh_auto_test:
@@ -23,10 +23,10 @@ override_dh_auto_test:
 endif
 
 override_dh_installinit:
-	dh_installinit --no-start --no-restart-on-upgrade --name cloud-init-local
-	dh_installinit --no-start --no-restart-on-upgrade
-	dh_installinit --no-start --no-restart-on-upgrade --name cloud-config
-	dh_installinit --no-start --no-restart-on-upgrade --name cloud-final
+	dh_installinit --onlyscripts --no-start --no-restart-on-upgrade --name cloud-init-local
+	dh_installinit --onlyscripts --no-start --no-restart-on-upgrade
+	dh_installinit --onlyscripts --no-start --no-restart-on-upgrade --name cloud-config
+	dh_installinit --onlyscripts --no-start --no-restart-on-upgrade --name cloud-final
 
 override_dh_systemd_start:
 	dh_systemd_start --no-restart-on-upgrade --no-start
