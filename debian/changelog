@@ -1,5 +1,6 @@
 cloud-init (0.7.7~bzr1156-1) UNRELEASED; urgency=medium
 
+  [ Charles Plessy ]
   * New usptream release and bzr snapshot.  (Closes: #804782)
     ed25519 ssh keys are generated (Closes: #788196).
   * Import some of the changes from ../config/cloud.cfg.
@@ -8,6 +9,9 @@ cloud-init (0.7.7~bzr1156-1) UNRELEASED; urgency=medium
   * Use upstream systemd units (Closes: #784083).
   * debian/00_debian.cfg: ensure that 'nofail' is used instead of
     'nobootwait' (Closes: #702382, #789884).
+
+  [ Bastian Blank ]
+  * Make Azure datasource run without root
 
  -- Charles Plessy <plessy@debian.org>  Mon, 23 Nov 2015 15:16:51 +0900
 
