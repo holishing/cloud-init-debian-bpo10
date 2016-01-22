@@ -34,7 +34,7 @@ Homepage: https://launchpad.net/cloud-init
 
 Package: cloud-init
 Architecture: all
-Depends: cloud-guest-utils | cloud-utils,
+Depends: lsb-release,
          ifupdown,
          procps,
          ${misc:Depends},
