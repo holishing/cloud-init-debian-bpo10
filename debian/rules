@@ -3,7 +3,7 @@
 export PYBUILD_INSTALL_ARGS=--init-system=systemd,sysvinit_deb,upstart
 
 %:
-	dh $@ --with python3,systemd --buildsystem=pybuild
+	dh $@ --with python3,systemd --buildsystem pybuild
 
 override_dh_install:
 	dh_install
