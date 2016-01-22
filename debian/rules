@@ -11,7 +11,7 @@ override_dh_install:
 	rm -rf debian/cloud-init/usr/lib/python?.?/dist-packages/tests
 
 override_dh_auto_install:
-	dh_auto_install -- --init-system=systemd
+	dh_auto_install -- --init-system=systemd,upstart
 
 ifeq (,$(findstring nocheck, $(DEB_BUILD_OPTIONS)))
 override_dh_auto_test:
