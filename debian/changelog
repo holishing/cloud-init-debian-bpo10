@@ -1,4 +1,4 @@
-cloud-init (0.7.7~bzr1156-1) UNRELEASED; urgency=medium
+cloud-init (0.7.7~bzr1156-1) unstable; urgency=medium
 
   [ Charles Plessy ]
   * New usptream release and bzr snapshot.  (Closes: #804782)
@@ -20,7 +20,7 @@ cloud-init (0.7.7~bzr1156-1) UNRELEASED; urgency=medium
   * Update default cloud.cfg.
   * Add myself as uploader.
 
- -- Charles Plessy <plessy@debian.org>  Mon, 23 Nov 2015 15:16:51 +0900
+ -- Bastian Blank <waldi@debian.org>  Fri, 29 Jan 2016 14:28:01 +0100
 
 cloud-init (0.7.6~bzr976-5) unstable; urgency=medium
 
