@@ -1,3 +1,4 @@
 fix-path-to-blkid-binary.patch
 disable-rhel-set-hostname-test.patch
 azure-sys-firmware-read.patch
+debian-sources.list.patch
