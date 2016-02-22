@@ -148,6 +148,11 @@ case "$1" in
          convert_varlib_05x_06x
       fi
 
+      if dpkg --compare-versions "$2" le 0.7.7~bzr1156-2; then
+         dpkg-divert --package cloud-init --remove --rename --divert \
+            /etc/init/ureadahead.conf.disabled /etc/init/ureadahead.conf
+      fi
+
       d=/etc/cloud/
       if [ -f "$d/distro.cfg" ] && [ ! -f "$d/cloud.cfg.d/90_dpkg.cfg" ]; then
          echo "moving $d/distro.cfg -> $d/cloud.cfg.d/90_dpkg.cfg"

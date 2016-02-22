@@ -115,9 +115,6 @@ handle_preseed_local_cloud_config() {
 }
 
 if [ "$1" = "configure" ]; then
-   # disable ureadahead (LP: #499520)
-   dpkg-divert --package cloud-init --rename --divert \
-      /etc/init/ureadahead.conf.disabled --add /etc/init/ureadahead.conf
    if db_get cloud-init/datasources; then
       values="$RET"
       if [ "${values#*MaaS}" != "${values}" ]; then
