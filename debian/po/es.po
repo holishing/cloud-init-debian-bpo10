@@ -1,0 +1,121 @@
+# cloud-init po-debconf translation to Spanish.
+# Copyright (C) 2015 Software in the Public Interest
+# This file is distributed under the same license as the cloud-init package.
+#
+# Changes:
+# - Initial translation
+# Jonathan Bustillos <jathanblackred@openmailbox.com>, 2015.
+#
+# Traductores, si no conocen el formato PO, merece la pena leer la
+# documentación de gettext, especialmente las secciones dedicadas a este
+# formato, por ejemplo ejecutando:
+# info -n '(gettext)PO Files'
+# info -n '(gettext)Header Entry'
+#
+# Equipo de traducción al español, por favor lean antes de traducir
+# los siguientes documentos:
+#
+# - El proyecto de traducción de Debian al español
+# http://www.debian.org/intl/spanish/
+# especialmente las notas y normas de traducción en
+# http://www.debian.org/intl/spanish/notas
+#
+# - La guía de traducción de po's de debconf:
+# /usr/share/doc/po-debconf/README-trans
+# o http://www.debian.org/intl/l10n/po-debconf/README-trans
+msgid ""
+msgstr ""
+"Project-Id-Version: PACKAGE VERSION\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2014-07-06 14:28+0000\n"
+"PO-Revision-Date: 2015-04-14 10:42-0500\n"
+"Last-Translator: Jonathan Bustillos <jathanblackred@openmailbox.com>\n"
+"Language-Team: Debian Spanish <debian-l10n-spanish@lists.debian.org>\n"
+"Language: \n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+"X-Generator: Gtranslator 2.91.6\n"
+
+#. Type: multiselect
+#. Choices
+#: ../cloud-init.templates:1001
+msgid "/var/lib/cloud/seed only"
+msgstr "Únicamente /var/lib/cloud/seed"
+
+#. Type: multiselect
+#. Choices
+#: ../cloud-init.templates:1001
+msgid "AltCloud Config Drive"
+msgstr "Unidad de configuración de AltCloud"
+
+#. Type: multiselect
+#. Choices
+#: ../cloud-init.templates:1001
+msgid "CloudStack metadata service"
+msgstr "Servicio de metadatos de CloudStack"
+
+#. Type: multiselect
+#. Choices
+#: ../cloud-init.templates:1001
+msgid "OpenStack Config Drive"
+msgstr "Unidad de configuración de OpenStack"
+
+#. Type: multiselect
+#. Choices
+#: ../cloud-init.templates:1001
+msgid "EC2 Metadata service"
+msgstr "Servicio de metadatos de EC2"
+
+#. Type: multiselect
+#. Choices
+#: ../cloud-init.templates:1001
+msgid "Ubuntu MAAS"
+msgstr "Ubuntu MAAS"
+
+#. Type: multiselect
+#. Choices
+#: ../cloud-init.templates:1001
+msgid "OVF Transports"
+msgstr "Transportes de OVF"
+
+#. Type: multiselect
+#. Choices
+#: ../cloud-init.templates:1001
+msgid "Google Cloud Engine"
+msgstr "Motor en la nube de Google"
+
+#. Type: multiselect
+#. Choices
+#: ../cloud-init.templates:1001
+msgid "Failsafe datasource"
+msgstr "Fuente de datos a prueba de fallos"
+
+#. Type: multiselect
+#. Description
+#: ../cloud-init.templates:1002
+msgid "Data sources to read from:"
+msgstr "Leer fuentes de datos desde:"
+
+#. Type: multiselect
+#. Description
+#: ../cloud-init.templates:1002
+msgid ""
+"Cloud-init supports searching different \"Data Sources\" for information "
+"that it uses to configure a cloud instance."
+msgstr ""
+"Cloud-init permite buscar diferentes «Fuentes de datos» para obtener "
+"información que se utiliza para configurar una instancia en la nube."
+
+#. Type: multiselect
+#. Description
+#: ../cloud-init.templates:1002
+msgid ""
+"Please note that \"EC2 Metadata service\" should be used only if the EC2 "
+"metadata service is present. Otherwise, it will trigger a very noticeable "
+"timeout on boot."
+msgstr ""
+"Tenga en cuenta que el «Servicio de metadatos de EC2» sólo debe utilizarse "
+"si el servicio de metadatos EC2 está presente. De lo contrario, se producirá "
+"un tiempo de espera notable en el arranque."
