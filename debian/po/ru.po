@@ -1,13 +1,13 @@
 # Copyright (C) YEAR THE PACKAGE'S COPYRIGHT HOLDER
 # This file is distributed under the same license as the cloud-init package.
 #
-# Yuri Kozlov <yuray@komyakino.ru>, 2013.
+# Yuri Kozlov <yuray@komyakino.ru>, 2013, 2014.
 msgid ""
 msgstr ""
-"Project-Id-Version: cloud-init 0.7.2-3\n"
-"Report-Msgid-Bugs-To: cloud-init@packages.debian.org\n"
-"POT-Creation-Date: 2013-06-26 06:56+0200\n"
-"PO-Revision-Date: 2013-07-06 10:56+0400\n"
+"Project-Id-Version: cloud-init 0.7.6~bzr976-2\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2014-07-06 14:28+0000\n"
+"PO-Revision-Date: 2014-09-15 09:39+0400\n"
 "Last-Translator: Yuri Kozlov <yuray@komyakino.ru>\n"
 "Language-Team: Russian <debian-l10n-russian@lists.debian.org>\n"
 "Language: ru\n"
@@ -16,66 +16,71 @@ msgstr ""
 "Content-Transfer-Encoding: 8bit\n"
 "Plural-Forms: nplurals=3; plural=(n%10==1 && n%100!=11 ? 0 : n%10>=2 && n"
 "%10<=4 && (n%100<10 || n%100>=20) ? 1 : 2);\n"
-"X-Generator: Lokalize 1.4\n"
+"X-Generator: Lokalize 1.5\n"
 
 #. Type: multiselect
 #. Choices
-#: ../cloud-init.templates:2001
+#: ../cloud-init.templates:1001
 msgid "/var/lib/cloud/seed only"
 msgstr "Только /var/lib/cloud/seed"
 
 #. Type: multiselect
 #. Choices
-#: ../cloud-init.templates:2001
+#: ../cloud-init.templates:1001
 msgid "AltCloud Config Drive"
 msgstr "Настройки диска AltCloud"
 
 #. Type: multiselect
 #. Choices
-#: ../cloud-init.templates:2001
+#: ../cloud-init.templates:1001
 msgid "CloudStack metadata service"
 msgstr "Служба метаданных CloudStack"
 
 #. Type: multiselect
 #. Choices
-#: ../cloud-init.templates:2001
+#: ../cloud-init.templates:1001
 msgid "OpenStack Config Drive"
 msgstr "Настройки диска OpenStack"
 
 #. Type: multiselect
 #. Choices
-#: ../cloud-init.templates:2001
+#: ../cloud-init.templates:1001
 msgid "EC2 Metadata service"
 msgstr "Служба метаданных EC2"
 
 #. Type: multiselect
 #. Choices
-#: ../cloud-init.templates:2001
+#: ../cloud-init.templates:1001
 msgid "Ubuntu MAAS"
 msgstr "Ubuntu MAAS"
 
 #. Type: multiselect
 #. Choices
-#: ../cloud-init.templates:2001
+#: ../cloud-init.templates:1001
 msgid "OVF Transports"
 msgstr "Транспорты OVF"
 
 #. Type: multiselect
 #. Choices
-#: ../cloud-init.templates:2001
-#| msgid "Failsafe dataso"
+#: ../cloud-init.templates:1001
+msgid "Google Cloud Engine"
+msgstr "Google Cloud Engine"
+
+#. Type: multiselect
+#. Choices
+#: ../cloud-init.templates:1001
 msgid "Failsafe datasource"
 msgstr "Устойчивый к отказам источник данных"
 
 #. Type: multiselect
 #. Description
-#: ../cloud-init.templates:2002
+#: ../cloud-init.templates:1002
 msgid "Data sources to read from:"
 msgstr "Источники данных для чтения:"
 
 #. Type: multiselect
 #. Description
-#: ../cloud-init.templates:2002
+#: ../cloud-init.templates:1002
 msgid ""
 "Cloud-init supports searching different \"Data Sources\" for information "
 "that it uses to configure a cloud instance."
@@ -85,7 +90,7 @@ msgstr ""
 
 #. Type: multiselect
 #. Description
-#: ../cloud-init.templates:2002
+#: ../cloud-init.templates:1002
 msgid ""
 "Please note that \"EC2 Metadata service\" should be used only if the EC2 "
 "metadata service is present. Otherwise, it will trigger a very noticeable "
@@ -94,3 +99,4 @@ msgstr ""
 "Заметим, что «службу метаданных EC2» можно использовать, только если она "
 "действительно есть. В противном случае, её отсутствие приведёт к очень "
 "заметной задержке при запуске."
+
