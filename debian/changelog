@@ -1,13 +1,14 @@
 cloud-init (0.7.7~bzr1156-3) UNRELEASED; urgency=medium
 
   * Translations added or updated.
-    - Danish:   Joe Dalton <joedalton2@yahoo.dk>                 Closes: #781336
-    - Dutch:    Frans Spiesschaert <Frans.Spiesschaert@yucom.be> Closes: #765869
-    - Japanese: Takuma Yamada <tyamada@takumayamada.com>         Closes: #816071
-    - Russian:  Yuri Kozlov <yuray@komyakino.ru>                 Closes: #761617
-    - Spanish:  Jathan <jathanblackred@openmailbox.org>          Closes: #783564
-    - Swedish:  Martin Bagge <brother@bsnet.se>
-                Anders Jonsson <anders.jonsson@norsjovallen.se>  Closes: #781681
+    - Danish:    Joe Dalton <joedalton2@yahoo.dk>                 Closes: #781336
+    - Dutch:     Frans Spiesschaert <Frans.Spiesschaert@yucom.be> Closes: #765869
+    - Japanese:  Takuma Yamada <tyamada@takumayamada.com>         Closes: #816071
+    - Portugese: Américo Monteiro <a_monteiro@gmx.com>            Closes: #816141
+    - Russian:   Yuri Kozlov <yuray@komyakino.ru>                 Closes: #761617
+    - Spanish:   Jathan <jathanblackred@openmailbox.org>          Closes: #783564
+    - Swedish:   Martin Bagge <brother@bsnet.se>
+                 Anders Jonsson <anders.jonsson@norsjovallen.se>  Closes: #781681
 
  -- Charles Plessy <plessy@debian.org>  Sat, 27 Feb 2016 20:38:34 +0900
 

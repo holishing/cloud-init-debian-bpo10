@@ -2,13 +2,13 @@
 # Copyright (C) 2013 the cloud-init's copyright holder
 # This file is distributed under the same license as the cloud-init package.
 #
-# Américo Monteiro <a_monteiro@gmx.com>, 2013, 2014.
+# Américo Monteiro <a_monteiro@gmx.com>, 2013 - 2016.
 msgid ""
 msgstr ""
-"Project-Id-Version: cloud-init 0.7.5-1\n"
+"Project-Id-Version: cloud-init 0.7.7~bzr1156-2\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2014-05-17 14:28+0000\n"
-"PO-Revision-Date: 2014-05-18 00:04+0100\n"
+"POT-Creation-Date: 2016-02-25 14:30+0000\n"
+"PO-Revision-Date: 2016-02-28 00:22+0000\n"
 "Last-Translator: Américo Monteiro <a_monteiro@gmx.com>\n"
 "Language-Team: Portuguese <traduz@debianpt.org>\n"
 "Language: pt\n"
@@ -21,56 +21,95 @@ msgstr ""
 #. Type: multiselect
 #. Choices
 #: ../cloud-init.templates:1001
-msgid "/var/lib/cloud/seed only"
-msgstr "Apenas /var/lib/cloud/seed"
+#| msgid "/var/lib/cloud/seed only"
+msgid "NoCloud: Use /var/lib/cloud/seed"
+msgstr "NoCloud: Utilize /var/lib/cloud/seed"
 
 #. Type: multiselect
 #. Choices
 #: ../cloud-init.templates:1001
-msgid "AltCloud Config Drive"
-msgstr "Drive de Configuração AltCloud"
+#| msgid "OpenStack Config Drive"
+msgid "ConfigDrive: OpenStack config drive"
+msgstr "ConfigDrive: Drive de Configuração do OpenStack"
 
 #. Type: multiselect
 #. Choices
 #: ../cloud-init.templates:1001
-msgid "CloudStack metadata service"
-msgstr "Serviço de metadados do CloudStack"
+msgid "OpenNebula: OpenNebula context disk"
+msgstr "OpenNebula: Disco de contexto do OpenNebula"
 
 #. Type: multiselect
 #. Choices
 #: ../cloud-init.templates:1001
-msgid "OpenStack Config Drive"
-msgstr "Drive de Configuração OpenStack"
+msgid "Azure: Microsoft Azure. Requires waagent package!"
+msgstr "Azure: Microsoft Azure. Requer o pacote waagent!"
 
 #. Type: multiselect
 #. Choices
 #: ../cloud-init.templates:1001
-msgid "EC2 Metadata service"
-msgstr "Serviço de Metadados EC2"
+msgid "AltCloud: RHEVm and vSphere config disks"
+msgstr "AltCloud: Discos de configuração RHEVm e vSphere"
 
 #. Type: multiselect
 #. Choices
 #: ../cloud-init.templates:1001
-msgid "Ubuntu MAAS"
-msgstr "MAAS do Ubuntu"
+#| msgid "OVF Transports"
+msgid "OVF: OVF transports"
+msgstr "OVF: Transportes OVF"
 
 #. Type: multiselect
 #. Choices
 #: ../cloud-init.templates:1001
-msgid "OVF Transports"
-msgstr "Transportes OVF"
+#| msgid "Ubuntu MAAS"
+msgid "MAAS: Ubuntu MAAS"
+msgstr "MAAS: MAAS do Ubuntu"
 
 #. Type: multiselect
 #. Choices
 #: ../cloud-init.templates:1001
-msgid "Google Cloud Engine"
-msgstr "Motor Cloud da Google (Google Cloud Engine)"
+#| msgid "CloudStack metadata service"
+msgid "GCE: Google Compute metadata service"
+msgstr "GCE: Serviço de meta-dados do Google Compute"
 
 #. Type: multiselect
 #. Choices
 #: ../cloud-init.templates:1001
-msgid "Failsafe datasource"
-msgstr "Fonte de dados de Failsafe"
+#| msgid "CloudStack metadata service"
+msgid "OpenStack: Native OpenStack metadata service"
+msgstr "OpenStack: Serviço nativo de meta-dados do OpenStack"
+
+#. Type: multiselect
+#. Choices
+#: ../cloud-init.templates:1001
+msgid "CloudSigma: Metadata over serial for cloudsigma.com"
+msgstr "CloudSigma: Meta-dados sobre série para cloudsigma.com"
+
+#. Type: multiselect
+#. Choices
+#: ../cloud-init.templates:1001
+#| msgid "CloudStack metadata service"
+msgid "SmartOS: SmartOS metadata service"
+msgstr "SmartOS: Serviço de meta-dados do SmartOS"
+
+#. Type: multiselect
+#. Choices
+#: ../cloud-init.templates:1001
+#| msgid "EC2 Metadata service"
+msgid "Ec2: EC2 Metadata service"
+msgstr "Ec2: Serviço de Meta-dados EC2"
+
+#. Type: multiselect
+#. Choices
+#: ../cloud-init.templates:1001
+#| msgid "CloudStack metadata service"
+msgid "CloudStack: CloudStack metadata service"
+msgstr "CloudStack: Serviço de meta-dados do CloudStack"
+
+#. Type: multiselect
+#. Choices
+#: ../cloud-init.templates:1001
+msgid "None: Fallback"
+msgstr "None: Regressar"
 
 #. Type: multiselect
 #. Description
@@ -96,7 +135,15 @@ msgid ""
 "metadata service is present. Otherwise, it will trigger a very noticeable "
 "timeout on boot."
 msgstr ""
-"Por favor note que o \"Serviço de Metadados EC2\" deve apenas ser usado se "
-"estiver presente um serviço de metadados EC2. Caso contrário, irá provocar "
+"Por favor note que o \"Serviço de Meta-dados EC2\" deve apenas ser usado se "
+"estiver presente um serviço de meta-dados EC2. Caso contrário, irá provocar "
 "um atraso bastante notável no arranque da máquina."
 
+#~ msgid "AltCloud Config Drive"
+#~ msgstr "Drive de Configuração AltCloud"
+
+#~ msgid "Google Cloud Engine"
+#~ msgstr "Motor Cloud da Google (Google Cloud Engine)"
+
+#~ msgid "Failsafe datasource"
+#~ msgstr "Fonte de dados de Failsafe"
