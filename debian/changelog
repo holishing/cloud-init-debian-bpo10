@@ -4,16 +4,26 @@ cloud-init (0.7.7~bzr1215-1) UNRELEASED; urgency=medium
 
   [ Charles Plessy ]
   * Translations added or updated.
-    - Danish:    Joe Dalton <joedalton2@yahoo.dk>                 Closes: #781336
-    - Dutch:     Frans Spiesschaert <Frans.Spiesschaert@yucom.be> Closes: #765869
-    - Japanese:  Takuma Yamada <tyamada@takumayamada.com>         Closes: #816071
-    - Portugese: Américo Monteiro <a_monteiro@gmx.com>            Closes: #816141
-    - Russian:   Yuri Kozlov <yuray@komyakino.ru>                 Closes: #761617
-    - Spanish:   Jathan <jathanblackred@openmailbox.org>          Closes: #783564
-    - Swedish:   Martin Bagge <brother@bsnet.se>
-                 Anders Jonsson <anders.jonsson@norsjovallen.se>  Closes: #781681
+    - Danish: Joe Dalton <joedalton2@yahoo.dk>
+      Closes: #781336
+    - Dutch: Frans Spiesschaert <Frans.Spiesschaert@yucom.be>
+      Closes: #765869
+    - Japanese: Takuma Yamada <tyamada@takumayamada.com>
+      Closes: #816071
+    - Portuguese: Américo Monteiro <a_monteiro@gmx.com>
+      Closes: #816141
+    - Russian: Yuri Kozlov <yuray@komyakino.ru>
+      Closes: #761617
+    - Spanish: Jathan <jathanblackred@openmailbox.org>
+      Closes: #783564
+    - Swedish: Martin Bagge <brother@bsnet.se>
+               Anders Jonsson <anders.jonsson@norsjovallen.se>
+      Closes: #781681
   * Update syntax of rsyslog snippet ("~" is deprecated).
     Thanks to Tobias Wolter <towo@ydal.de> (Closes: #791934)
+
+  [ Bastian Blank ]
+  * Fix tests.
 
  -- Bastian Blank <bastian.blank@credativ.de>  Fri, 06 May 2016 11:57:29 +0200
 
