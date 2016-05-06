@@ -26,6 +26,7 @@ from cloudinit import distros
 from cloudinit import helpers
 from cloudinit import log as logging
 from cloudinit import util
+from cloudinit import net
 
 from cloudinit.distros.parsers.hostname import HostnameConf
 
@@ -45,7 +46,8 @@ APT_GET_WRAPPER = {
 class Distro(distros.Distro):
     hostname_conf_fn = "/etc/hostname"
     locale_conf_fn = "/etc/default/locale"
-    network_conf_fn = "/etc/network/interfaces"
+    network_conf_fn = "/etc/network/interfaces.d/50-cloud-init.cfg"
+    links_prefix = "/etc/systemd/network/50-cloud-init-"
 
     def __init__(self, name, cfg, paths):
         distros.Distro.__init__(self, name, cfg, paths)
@@ -75,6 +77,16 @@ class Distro(distros.Distro):
     def _write_network(self, settings):
         util.write_file(self.network_conf_fn, settings)
         return ['all']
+
+    def _write_network_config(self, netconfig):
+        ns = net.parse_net_config_data(netconfig)
+        net.render_network_state(target="/", network_state=ns,
+                                 eni=self.network_conf_fn,
+                                 links_prefix=self.links_prefix,
+                                 netrules=None)
+        _maybe_remove_legacy_eth0()
+
+        return []
 
     def _bring_up_interfaces(self, device_names):
         use_all = False
@@ -159,8 +171,9 @@ class Distro(distros.Distro):
 
         # Allow the output of this to flow outwards (ie not be captured)
         util.log_time(logfunc=LOG.debug,
-            msg="apt-%s [%s]" % (command, ' '.join(cmd)), func=util.subp,
-            args=(cmd,), kwargs={'env': e, 'capture': False})
+                      msg="apt-%s [%s]" % (command, ' '.join(cmd)),
+                      func=util.subp,
+                      args=(cmd,), kwargs={'env': e, 'capture': False})
 
     def update_package_sources(self):
         self._runner.run("update-sources", self.package_command,
@@ -181,3 +194,34 @@ def _get_wrapper_prefix(cmd, mode):
         return cmd
     else:
         return []
+
+
+def _maybe_remove_legacy_eth0(path="/etc/network/interfaces.d/eth0.cfg"):
+    """Ubuntu cloud images previously included a 'eth0.cfg' that had
+       hard coded content.  That file would interfere with the rendered
+       configuration if it was present.
+
+       if the file does not exist do nothing.
+       If the file exists:
+         - with known content, remove it and warn
+         - with unknown content, leave it and warn
+    """
+
+    if not os.path.exists(path):
+        return
+
+    bmsg = "Dynamic networking config may not apply."
+    try:
+        contents = util.load_file(path)
+        known_contents = ["auto eth0", "iface eth0 inet dhcp"]
+        lines = [f.strip() for f in contents.splitlines()
+                 if not f.startswith("#")]
+        if lines == known_contents:
+            util.del_file(path)
+            msg = "removed %s with known contents" % path
+        else:
+            msg = (bmsg + " '%s' exists with user configured content." % path)
+    except:
+        msg = bmsg + " %s exists, but could not be read." % path
+
+    LOG.warn(msg)

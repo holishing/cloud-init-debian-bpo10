@@ -19,10 +19,14 @@
 from cloudinit import util
 
 
-def handle(_name, cfg, _cloud, log, _args):
+def handle(name, cfg, _cloud, log, _args):
     sm = SubscriptionManager(cfg)
     sm.log = log
-    if not sm.is_registered:
+    if not sm.is_configured():
+        log.debug("%s: module not configured.", name)
+        return None
+
+    if not sm.is_registered():
         try:
             verify, verify_msg = sm._verify_keys()
             if verify is not True:
@@ -95,7 +99,6 @@ class SubscriptionManager(object):
         self.disable_repo = self.rhel_cfg.get('disable-repo')
         self.servicelevel = self.rhel_cfg.get('service-level')
         self.subman = ['subscription-manager']
-        self.is_registered = self._is_registered()
 
     def log_success(self, msg):
         '''Simple wrapper for logging info messages. Useful for unittests'''
@@ -126,17 +129,15 @@ class SubscriptionManager(object):
                        "(True/False "
             return False, not_bool
 
-        if (self.servicelevel is not None) and \
-                ((not self.auto_attach)
-                 or (util.is_false(str(self.auto_attach)))):
-
+        if (self.servicelevel is not None) and ((not self.auto_attach) or
+           (util.is_false(str(self.auto_attach)))):
             no_auto = ("The service-level key must be used in conjunction "
                        "with the auto-attach key.  Please re-run with "
                        "auto-attach: True")
             return False, no_auto
         return True, None
 
-    def _is_registered(self):
+    def is_registered(self):
         '''
         Checks if the system is already registered and returns
         True if so, else False
@@ -402,3 +403,6 @@ class SubscriptionManager(object):
             self.log.debug("Disabled the following repos: %s" %
                            (", ".join(disable_list)).replace('--disable=', ''))
         return True
+
+    def is_configured(self):
+        return bool((self.userid and self.password) or self.activation_key)

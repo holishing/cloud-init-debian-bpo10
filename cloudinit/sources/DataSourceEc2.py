@@ -61,12 +61,12 @@ class DataSourceEc2(sources.DataSource):
             if not self.wait_for_metadata_service():
                 return False
             start_time = time.time()
-            self.userdata_raw = ec2.get_instance_userdata(self.api_ver,
-                self.metadata_address)
+            self.userdata_raw = \
+                ec2.get_instance_userdata(self.api_ver, self.metadata_address)
             self.metadata = ec2.get_instance_metadata(self.api_ver,
                                                       self.metadata_address)
             LOG.debug("Crawl of metadata service took %s seconds",
-                       int(time.time() - start_time))
+                      int(time.time() - start_time))
             return True
         except Exception:
             util.logexc(LOG, "Failed reading from metadata address %s",
@@ -84,8 +84,6 @@ class DataSourceEc2(sources.DataSource):
 
     def _get_url_settings(self):
         mcfg = self.ds_cfg
-        if not mcfg:
-            mcfg = {}
         max_wait = 120
         try:
             max_wait = int(mcfg.get("max_wait", max_wait))
@@ -102,8 +100,6 @@ class DataSourceEc2(sources.DataSource):
 
     def wait_for_metadata_service(self):
         mcfg = self.ds_cfg
-        if not mcfg:
-            mcfg = {}
 
         (max_wait, timeout) = self._get_url_settings()
         if max_wait <= 0:
@@ -132,13 +128,13 @@ class DataSourceEc2(sources.DataSource):
 
         start_time = time.time()
         url = uhelp.wait_for_url(urls=urls, max_wait=max_wait,
-                                timeout=timeout, status_cb=LOG.warn)
+                                 timeout=timeout, status_cb=LOG.warn)
 
         if url:
             LOG.debug("Using metadata source: '%s'", url2base[url])
         else:
             LOG.critical("Giving up on md from %s after %s seconds",
-                            urls, int(time.time() - start_time))
+                         urls, int(time.time() - start_time))
 
         self.metadata_address = url2base.get(url)
         return bool(url)
@@ -206,7 +202,7 @@ class DataSourceEc2(sources.DataSource):
 
 # Used to match classes to dependencies
 datasources = [
-  (DataSourceEc2, (sources.DEP_FILESYSTEM, sources.DEP_NETWORK)),
+    (DataSourceEc2, (sources.DEP_FILESYSTEM, sources.DEP_NETWORK)),
 ]
 
 

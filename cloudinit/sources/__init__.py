@@ -70,6 +70,9 @@ class DataSource(object):
 
         self.ds_cfg = util.get_cfg_by_path(self.sys_cfg,
                                            ("datasource", name), {})
+        if not self.ds_cfg:
+            self.ds_cfg = {}
+
         if not ud_proc:
             self.ud_proc = ud.UserDataProcessor(self.paths)
         else:
@@ -217,6 +220,14 @@ class DataSource(object):
     def get_package_mirror_info(self):
         return self.distro.get_package_mirror_info(data_source=self)
 
+    def check_instance_id(self, sys_cfg):
+        # quickly (local check only) if self.instance_id is still
+        return False
+
+    @property
+    def network_config(self):
+        return None
+
 
 def normalize_pubkey_data(pubkey_data):
     keys = []
@@ -297,6 +308,18 @@ def list_sources(cfg_list, depends, pkg_list):
                 src_list.extend(matches)
                 break
     return src_list
+
+
+def instance_id_matches_system_uuid(instance_id, field='system-uuid'):
+    # quickly (local check only) if self.instance_id is still valid
+    # we check kernel command line or files.
+    if not instance_id:
+        return False
+
+    dmi_value = util.read_dmi_data(field)
+    if not dmi_value:
+        return False
+    return instance_id.lower() == dmi_value.lower()
 
 
 # 'depends' is a list of dependencies (DEP_FILESYSTEM)

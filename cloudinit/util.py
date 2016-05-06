@@ -76,7 +76,11 @@ FALSE_STRINGS = ('off', '0', 'no', 'false')
 
 
 # Helper utils to see if running in a container
-CONTAINER_TESTS = ('running-in-container', 'lxc-is-container')
+CONTAINER_TESTS = (['systemd-detect-virt', '--quiet', '--container'],
+                   ['running-in-container'],
+                   ['lxc-is-container'])
+
+PROC_CMDLINE = None
 
 
 def decode_binary(blob, encoding='utf-8'):
@@ -610,7 +614,7 @@ def redirect_output(outfmt, errfmt, o_out=None, o_err=None):
 
 
 def make_url(scheme, host, port=None,
-                path='', params='', query='', fragment=''):
+             path='', params='', query='', fragment=''):
 
     pieces = []
     pieces.append(scheme or '')
@@ -802,8 +806,8 @@ def load_yaml(blob, default=None, allowed=(dict,)):
     blob = decode_binary(blob)
     try:
         LOG.debug("Attempting to load yaml from string "
-                 "of length %s with allowed root types %s",
-                 len(blob), allowed)
+                  "of length %s with allowed root types %s",
+                  len(blob), allowed)
         converted = safeyaml.load(blob)
         if not isinstance(converted, allowed):
             # Yes this will just be caught, but thats ok for now...
@@ -876,7 +880,7 @@ def read_conf_with_confd(cfgfile):
             if not isinstance(confd, six.string_types):
                 raise TypeError(("Config file %s contains 'conf_d' "
                                  "with non-string type %s") %
-                                 (cfgfile, type_utils.obj_name(confd)))
+                                (cfgfile, type_utils.obj_name(confd)))
             else:
                 confd = str(confd).strip()
     elif os.path.isdir("%s.d" % cfgfile):
@@ -1039,7 +1043,8 @@ def is_resolvable(name):
         for iname in badnames:
             try:
                 result = socket.getaddrinfo(iname, None, 0, 0,
-                    socket.SOCK_STREAM, socket.AI_CANONNAME)
+                                            socket.SOCK_STREAM,
+                                            socket.AI_CANONNAME)
                 badresults[iname] = []
                 for (_fam, _stype, _proto, cname, sockaddr) in result:
                     badresults[iname].append("%s: %s" % (cname, sockaddr[0]))
@@ -1107,7 +1112,7 @@ def close_stdin():
 
 
 def find_devs_with(criteria=None, oformat='device',
-                    tag=None, no_cache=False, path=None):
+                   tag=None, no_cache=False, path=None):
     """
     find devices matching given criteria (via blkid)
     criteria can be *one* of:
@@ -1188,12 +1193,27 @@ def load_file(fname, read_cb=None, quiet=False, decode=True):
 
 def get_cmdline():
     if 'DEBUG_PROC_CMDLINE' in os.environ:
-        cmdline = os.environ["DEBUG_PROC_CMDLINE"]
+        return os.environ["DEBUG_PROC_CMDLINE"]
+
+    global PROC_CMDLINE
+    if PROC_CMDLINE is not None:
+        return PROC_CMDLINE
+
+    if is_container():
+        try:
+            contents = load_file("/proc/1/cmdline")
+            # replace nulls with space and drop trailing null
+            cmdline = contents.replace("\x00", " ")[:-1]
+        except Exception as e:
+            LOG.warn("failed reading /proc/1/cmdline: %s", e)
+            cmdline = ""
     else:
         try:
             cmdline = load_file("/proc/cmdline").strip()
         except:
             cmdline = ""
+
+    PROC_CMDLINE = cmdline
     return cmdline
 
 
@@ -1566,7 +1586,7 @@ def uptime():
     try:
         if os.path.exists("/proc/uptime"):
             method = '/proc/uptime'
-            contents = load_file("/proc/uptime").strip()
+            contents = load_file("/proc/uptime")
             if contents:
                 uptime_str = contents.split()[0]
         else:
@@ -1626,7 +1646,7 @@ def write_file(filename, content, mode=0o644, omode="wb"):
         content = decode_binary(content)
         write_type = 'characters'
     LOG.debug("Writing to %s - %s: [%s] %s %s",
-               filename, omode, mode, len(content), write_type)
+              filename, omode, mode, len(content), write_type)
     with SeLinuxGuard(path=filename):
         with open(filename, omode) as fh:
             fh.write(content)
@@ -1749,7 +1769,7 @@ def is_container():
         try:
             # try to run a helper program. if it returns true/zero
             # then we're inside a container. otherwise, no
-            subp([helper])
+            subp(helper)
             return True
         except (IOError, OSError):
             pass
@@ -2137,15 +2157,21 @@ def _read_dmi_syspath(key):
             LOG.debug("did not find %s", dmi_key_path)
             return None
 
-        key_data = load_file(dmi_key_path)
+        key_data = load_file(dmi_key_path, decode=False)
         if not key_data:
             LOG.debug("%s did not return any data", dmi_key_path)
             return None
 
-        LOG.debug("dmi data %s returned %s", dmi_key_path, key_data)
-        return key_data.strip()
+        # uninitialized dmi values show as all \xff and /sys appends a '\n'.
+        # in that event, return a string of '.' in the same length.
+        if key_data == b'\xff' * (len(key_data) - 1) + b'\n':
+            key_data = b""
 
-    except Exception as e:
+        str_data = key_data.decode('utf8').strip()
+        LOG.debug("dmi data %s returned %s", dmi_key_path, str_data)
+        return str_data
+
+    except Exception:
         logexc(LOG, "failed read of %s", dmi_key_path)
         return None
 
@@ -2159,6 +2185,9 @@ def _call_dmidecode(key, dmidecode_path):
         cmd = [dmidecode_path, "--string", key]
         (result, _err) = subp(cmd)
         LOG.debug("dmidecode returned '%s' for '%s'", result, key)
+        result = result.strip()
+        if result.replace(".", "") == "":
+            return ""
         return result
     except (IOError, OSError) as _err:
         LOG.debug('failed dmidecode cmd: %s\n%s', cmd, _err.message)

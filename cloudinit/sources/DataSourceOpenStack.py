@@ -45,8 +45,6 @@ class DataSourceOpenStack(openstack.SourceMixin, sources.DataSource):
         self.version = None
         self.files = {}
         self.ec2_metadata = None
-        if not self.ds_cfg:
-            self.ds_cfg = {}
 
     def __str__(self):
         root = sources.DataSource.__str__(self)
@@ -149,6 +147,10 @@ class DataSourceOpenStack(openstack.SourceMixin, sources.DataSource):
             self.vendordata_raw = None
 
         return True
+
+    def check_instance_id(self, sys_cfg):
+        # quickly (local check only) if self.instance_id is still valid
+        return sources.instance_id_matches_system_uuid(self.get_instance_id())
 
 
 def read_metadata_service(base_url, ssl_details=None):
