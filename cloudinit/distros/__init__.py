@@ -75,6 +75,9 @@ class Distro(object):
         # to write this blob out in a distro format
         raise NotImplementedError()
 
+    def _write_network_config(self, settings):
+        raise NotImplementedError()
+
     def _find_tz_file(self, tz):
         tz_file = os.path.join(self.tz_zone_dir, str(tz))
         if not os.path.isfile(tz_file):
@@ -127,6 +130,14 @@ class Distro(object):
     def apply_network(self, settings, bring_up=True):
         # Write it out
         dev_names = self._write_network(settings)
+        # Now try to bring them up
+        if bring_up:
+            return self._bring_up_interfaces(dev_names)
+        return False
+
+    def apply_network_config(self, netconfig, bring_up=False):
+        # Write it out
+        dev_names = self._write_network_config(netconfig)
         # Now try to bring them up
         if bring_up:
             return self._bring_up_interfaces(dev_names)
@@ -211,8 +222,8 @@ class Distro(object):
 
         # If the system hostname is different than the previous
         # one or the desired one lets update it as well
-        if (not sys_hostname) or (sys_hostname == prev_hostname
-                                  and sys_hostname != hostname):
+        if ((not sys_hostname) or (sys_hostname == prev_hostname and
+           sys_hostname != hostname)):
             update_files.append(sys_fn)
 
         # If something else has changed the hostname after we set it
@@ -221,7 +232,7 @@ class Distro(object):
         if (sys_hostname and prev_hostname and
                 sys_hostname != prev_hostname):
             LOG.info("%s differs from %s, assuming user maintained hostname.",
-                       prev_hostname_fn, sys_fn)
+                     prev_hostname_fn, sys_fn)
             return
 
         # Remove duplicates (incase the previous config filename)
@@ -289,7 +300,7 @@ class Distro(object):
     def _bring_up_interface(self, device_name):
         cmd = ['ifup', device_name]
         LOG.debug("Attempting to run bring up interface %s using command %s",
-                   device_name, cmd)
+                  device_name, cmd)
         try:
             (_out, err) = util.subp(cmd)
             if len(err):
@@ -319,6 +330,11 @@ class Distro(object):
             LOG.info("User %s already exists, skipping." % name)
             return
 
+        if 'create_groups' in kwargs:
+            create_groups = kwargs.pop('create_groups')
+        else:
+            create_groups = True
+
         adduser_cmd = ['useradd', name]
         log_adduser_cmd = ['useradd', name]
 
@@ -345,6 +361,26 @@ class Distro(object):
         }
 
         redact_opts = ['passwd']
+
+        # support kwargs having groups=[list] or groups="g1,g2"
+        groups = kwargs.get('groups')
+        if groups:
+            if isinstance(groups, (list, tuple)):
+                # kwargs.items loop below wants a comma delimeted string
+                # that can go right through to the command.
+                kwargs['groups'] = ",".join(groups)
+            else:
+                groups = groups.split(",")
+
+            primary_group = kwargs.get('primary_group')
+            if primary_group:
+                groups.append(primary_group)
+
+        if create_groups and groups:
+            for group in groups:
+                if not util.is_group(group):
+                    self.create_group(group)
+                    LOG.debug("created group %s for user %s", name, group)
 
         # Check the values and create the command
         for key, val in kwargs.items():
@@ -392,6 +428,10 @@ class Distro(object):
         # Set password if plain-text password provided and non-empty
         if 'plain_text_passwd' in kwargs and kwargs['plain_text_passwd']:
             self.set_passwd(name, kwargs['plain_text_passwd'])
+
+        # Set password if hashed password is provided and non-empty
+        if 'hashed_passwd' in kwargs and kwargs['hashed_passwd']:
+            self.set_passwd(name, kwargs['hashed_passwd'], hashed=True)
 
         # Default locking down the account.  'lock_passwd' defaults to True.
         # lock account unless lock_password is False.
@@ -530,8 +570,10 @@ class Distro(object):
                 util.logexc(LOG, "Failed to append sudoers file %s", sudo_file)
                 raise e
 
-    def create_group(self, name, members):
+    def create_group(self, name, members=None):
         group_add_cmd = ['groupadd', name]
+        if not members:
+            members = []
 
         # Check if group exists, and then add it doesn't
         if util.is_group(name):
@@ -541,14 +583,14 @@ class Distro(object):
                 util.subp(group_add_cmd)
                 LOG.info("Created new group %s" % name)
             except Exception:
-                util.logexc("Failed to create group %s", name)
+                util.logexc(LOG, "Failed to create group %s", name)
 
         # Add members to the group, if so defined
         if len(members) > 0:
             for member in members:
                 if not util.is_user(member):
                     LOG.warn("Unable to add group member '%s' to group '%s'"
-                            "; user does not exist.", member, name)
+                             "; user does not exist.", member, name)
                     continue
 
                 util.subp(['usermod', '-a', '-G', name, member])
@@ -886,7 +928,7 @@ def fetch(name):
     locs, looked_locs = importer.find_module(name, ['', __name__], ['Distro'])
     if not locs:
         raise ImportError("No distribution found for distro %s (searched %s)"
-                           % (name, looked_locs))
+                          % (name, looked_locs))
     mod = importer.import_module(locs[0])
     cls = getattr(mod, 'Distro')
     return cls
@@ -897,5 +939,12 @@ def set_etc_timezone(tz, tz_file=None, tz_conf="/etc/timezone",
     util.write_file(tz_conf, str(tz).rstrip() + "\n")
     # This ensures that the correct tz will be used for the system
     if tz_local and tz_file:
-        util.copy(tz_file, tz_local)
+        # use a symlink if there exists a symlink or tz_local is not present
+        islink = os.path.islink(tz_local)
+        if islink or not os.path.exists(tz_local):
+            if islink:
+                util.del_file(tz_local)
+            os.symlink(tz_file, tz_local)
+        else:
+            util.copy(tz_file, tz_local)
     return

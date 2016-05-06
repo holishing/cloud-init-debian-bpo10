@@ -69,6 +69,47 @@
    as install from server or desktop ISO. (LP: #1177432)
  - cc_mounts: use 'nofail' if system uses systemd. (LP: #1514485)
  - Azure: get instance id from dmi instead of SharedConfig (LP: #1506187)
+ - systemd/power_state: fix power_state to work even if cloud-final
+   exited non-zero (LP: #1449318)
+ - SmartOS: Add support for Joyent LX-Brand Zones (LP: #1540965)
+   [Robert C Jennings]
+ - systemd: support using systemd-detect-virt to detect container
+   (LP: #1539016) [Martin Pitt]
+ - docs: fix lock_passwd documentation [Robert C Jennings]
+ - Azure: Handle escaped quotes in WALinuxAgentShim.find_endpoint.
+   (LP: #1488891) [Dan Watkins]
+ - lxd: add support for setting up lxd using 'lxd init' (LP: #1522879)
+ - Add Image Customization Parser for VMware vSphere Hypervisor
+   Support. [Sankar Tanguturi]
+ - timezone: use a symlink rather than copy for /etc/localtime
+   unless it is already a file (LP: #1543025).
+ - Enable password changing via a hashed string [Alex Sirbu]
+ - Added BigStep datasource [Alex Sirbu]
+ - No longer run pollinate in seed_random (LP: #1554152)
+ - groups: add defalt user to 'lxd' group.  Create groups listed
+   for a user if they do not exist. (LP: #1539317)
+ - dmi data: fix failure of reading dmi data for unset dmi values
+ - doc: mention label for nocloud datasource must be 'cidata' [Peter Hurley]
+ - ssh_pwauth: fix module to support 'unchanged' and match behavior
+   described in documentation [Chris Cosby]
+ - quickly check to see if the previous instance id is still valid to
+   avoid dependency on network metadata service on every boot (LP: #1553815)
+ - support network configuration in cloud-init --local with support
+   device naming via systemd.link.
+ - FreeBSD: add support for installing packages, setting password and
+   timezone.  Change default user to 'freebsd'. [Ben Arblaster]
+ - locale: list unsupported environment settings in warning (LP: #1558069)
+ - disk_setup: correctly send --force to mkfs on block devices (LP: #1548772)
+ - chef: fix chef install from gems (LP: #1553345)
+ - systemd: do not specify After of obsolete syslog.target (LP: #1536964)
+ - centos: Ensure that resolve conf object is written as a str (LP: #1479988)
+ - chef: straighten out validation_cert and validation_key (LP: #1568940)
+ - phone_home: allow usage of fqdn (LP: #1566824) [Ollie Armstrong]
+ - cloudstack: Only use DHCPv4 lease files as a datasource (LP: #1576273)
+   [Wido den Hollander]
+ - Paths: fix instance path if datasource's id has a '/'. (LP: #1575938)
+   [Robert Jennings]
+
 0.7.6:
  - open 0.7.6
  - Enable vendordata on CloudSigma datasource (LP: #1303986)
