@@ -1,5 +1,8 @@
-cloud-init (0.7.7~bzr1156-3) UNRELEASED; urgency=medium
+cloud-init (0.7.7~bzr1215-1) UNRELEASED; urgency=medium
 
+  * New upstream snapshot.
+
+  [ Charles Plessy ]
   * Translations added or updated.
     - Danish:    Joe Dalton <joedalton2@yahoo.dk>                 Closes: #781336
     - Dutch:     Frans Spiesschaert <Frans.Spiesschaert@yucom.be> Closes: #765869
@@ -12,7 +15,7 @@ cloud-init (0.7.7~bzr1156-3) UNRELEASED; urgency=medium
   * Update syntax of rsyslog snippet ("~" is deprecated).
     Thanks to Tobias Wolter <towo@ydal.de> (Closes: #791934)
 
- -- Charles Plessy <plessy@debian.org>  Sat, 27 Feb 2016 20:38:34 +0900
+ -- Bastian Blank <bastian.blank@credativ.de>  Fri, 06 May 2016 11:57:29 +0200
 
 cloud-init (0.7.7~bzr1156-2) unstable; urgency=medium
 
