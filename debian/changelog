@@ -1,8 +1,8 @@
-cloud-init (0.7.7~bzr1215-3) UNRELEASED; urgency=medium
+cloud-init (0.7.7~bzr1215-3) unstable; urgency=medium
 
   * Depend on gdisk, needed for GPT handling.
 
- -- Bastian Blank <bastian.blank@credativ.de>  Fri, 10 Jun 2016 14:22:22 +0200
+ -- Bastian Blank <bastian.blank@credativ.de>  Fri, 10 Jun 2016 16:56:41 +0200
 
 cloud-init (0.7.7~bzr1215-2) unstable; urgency=medium
 
