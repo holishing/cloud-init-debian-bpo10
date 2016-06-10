@@ -36,7 +36,8 @@ Homepage: https://launchpad.net/cloud-init
 
 Package: cloud-init
 Architecture: all
-Depends: lsb-release,
+Depends: gdisk,
+         lsb-release,
          ifupdown,
          procps,
          ${misc:Depends},
