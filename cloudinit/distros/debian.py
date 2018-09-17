@@ -13,8 +13,6 @@ import os
 from cloudinit import distros
 from cloudinit import helpers
 from cloudinit import log as logging
-from cloudinit.net import eni
-from cloudinit.net.network_state import parse_net_config_data
 from cloudinit import util
 
 from cloudinit.distros.parsers.hostname import HostnameConf
@@ -38,11 +36,23 @@ ENI_HEADER = """# This file is generated from information provided by
 # network: {config: disabled}
 """
 
+NETWORK_CONF_FN = "/etc/network/interfaces.d/50-cloud-init.cfg"
+LOCALE_CONF_FN = "/etc/default/locale"
+
 
 class Distro(distros.Distro):
     hostname_conf_fn = "/etc/hostname"
-    locale_conf_fn = "/etc/default/locale"
-    network_conf_fn = "/etc/network/interfaces.d/50-cloud-init.cfg"
+    network_conf_fn = {
+        "eni": "/etc/network/interfaces.d/50-cloud-init.cfg",
+        "netplan": "/etc/netplan/50-cloud-init.yaml"
+    }
+    renderer_configs = {
+        "eni": {"eni_path": network_conf_fn["eni"],
+                "eni_header": ENI_HEADER},
+        "netplan": {"netplan_path": network_conf_fn["netplan"],
+                    "netplan_header": ENI_HEADER,
+                    "postcmds": True}
+    }
 
     def __init__(self, name, cfg, paths):
         distros.Distro.__init__(self, name, cfg, paths)
@@ -51,39 +61,62 @@ class Distro(distros.Distro):
         # should only happen say once per instance...)
         self._runner = helpers.Runners(paths)
         self.osfamily = 'debian'
-        self._net_renderer = eni.Renderer({
-            'eni_path': self.network_conf_fn,
-            'eni_header': ENI_HEADER,
-            'links_path_prefix': None,
-            'netrules_path': None,
-        })
+        self.default_locale = 'en_US.UTF-8'
+        self.system_locale = None
 
-    def apply_locale(self, locale, out_fn=None):
+    def get_locale(self):
+        """Return the default locale if set, else use default locale"""
+
+        # read system locale value
+        if not self.system_locale:
+            self.system_locale = read_system_locale()
+
+        # Return system_locale setting if valid, else use default locale
+        return (self.system_locale if self.system_locale else
+                self.default_locale)
+
+    def apply_locale(self, locale, out_fn=None, keyname='LANG'):
+        """Apply specified locale to system, regenerate if specified locale
+            differs from system default."""
         if not out_fn:
-            out_fn = self.locale_conf_fn
-        util.subp(['locale-gen', locale], capture=False)
-        util.subp(['update-locale', locale], capture=False)
-        # "" provides trailing newline during join
-        lines = [
-            util.make_header(),
-            'LANG="%s"' % (locale),
-            "",
-        ]
-        util.write_file(out_fn, "\n".join(lines))
+            out_fn = LOCALE_CONF_FN
+
+        if not locale:
+            raise ValueError('Failed to provide locale value.')
+
+        # Only call locale regeneration if needed
+        # Update system locale config with specified locale if needed
+        distro_locale = self.get_locale()
+        conf_fn_exists = os.path.exists(out_fn)
+        sys_locale_unset = False if self.system_locale else True
+        need_regen = (locale.lower() != distro_locale.lower() or
+                      not conf_fn_exists or sys_locale_unset)
+        need_conf = not conf_fn_exists or need_regen or sys_locale_unset
+
+        if need_regen:
+            regenerate_locale(locale, out_fn, keyname=keyname)
+        else:
+            LOG.debug(
+                "System has '%s=%s' requested '%s', skipping regeneration.",
+                keyname, self.system_locale, locale)
+
+        if need_conf:
+            update_locale_conf(locale, out_fn, keyname=keyname)
+            # once we've updated the system config, invalidate cache
+            self.system_locale = None
 
     def install_packages(self, pkglist):
         self.update_package_sources()
         self.package_command('install', pkgs=pkglist)
 
     def _write_network(self, settings):
-        util.write_file(self.network_conf_fn, settings)
+        # this is a legacy method, it will always write eni
+        util.write_file(self.network_conf_fn["eni"], settings)
         return ['all']
 
     def _write_network_config(self, netconfig):
-        ns = parse_net_config_data(netconfig)
-        self._net_renderer.render_network_state("/", ns)
         _maybe_remove_legacy_eth0()
-        return []
+        return self._supported_write_network_config(netconfig)
 
     def _bring_up_interfaces(self, device_names):
         use_all = False
@@ -140,8 +173,7 @@ class Distro(distros.Distro):
             pkgs = []
 
         e = os.environ.copy()
-        # See: http://tiny.cc/kg91fw
-        # Or: http://tiny.cc/mh91fw
+        # See: http://manpages.ubuntu.com/manpages/xenial/man7/debconf.7.html
         e['DEBIAN_FRONTEND'] = 'noninteractive'
 
         wcfg = self.get_option("apt_get_wrapper", APT_GET_WRAPPER)
@@ -221,6 +253,50 @@ def _maybe_remove_legacy_eth0(path="/etc/network/interfaces.d/eth0.cfg"):
     except Exception:
         msg = bmsg + " %s exists, but could not be read." % path
 
-    LOG.warn(msg)
+    LOG.warning(msg)
+
+
+def read_system_locale(sys_path=LOCALE_CONF_FN, keyname='LANG'):
+    """Read system default locale setting, if present"""
+    sys_val = ""
+    if not sys_path:
+        raise ValueError('Invalid path: %s' % sys_path)
+
+    if os.path.exists(sys_path):
+        locale_content = util.load_file(sys_path)
+        sys_defaults = util.load_shell_content(locale_content)
+        sys_val = sys_defaults.get(keyname, "")
+
+    return sys_val
+
+
+def update_locale_conf(locale, sys_path, keyname='LANG'):
+    """Update system locale config"""
+    LOG.debug('Updating %s with locale setting %s=%s',
+              sys_path, keyname, locale)
+    util.subp(
+        ['update-locale', '--locale-file=' + sys_path,
+         '%s=%s' % (keyname, locale)], capture=False)
+
+
+def regenerate_locale(locale, sys_path, keyname='LANG'):
+    """
+    Run locale-gen for the provided locale and set the default
+    system variable `keyname` appropriately in the provided `sys_path`.
+
+    """
+    # special case for locales which do not require regen
+    # % locale -a
+    # C
+    # C.UTF-8
+    # POSIX
+    if locale.lower() in ['c', 'c.utf-8', 'posix']:
+        LOG.debug('%s=%s does not require rengeneration', keyname, locale)
+        return
+
+    # finally, trigger regeneration
+    LOG.debug('Generating locales for %s', locale)
+    util.subp(['locale-gen', locale], capture=False)
+
 
 # vi: ts=4 expandtab

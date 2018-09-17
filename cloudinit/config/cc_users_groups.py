@@ -15,7 +15,8 @@ options, see the ``Including users and groups`` config example.
 Groups to add to the system can be specified as a list under the ``groups``
 key. Each entry in the list should either contain a the group name as a string,
 or a dictionary with the group name as the key and a list of users who should
-be members of the group as the value.
+be members of the group as the value. **Note**: Groups are added before users,
+so any users in a group list must already exist on the system.
 
 The ``users`` config key takes a list of users to configure. The first entry in
 this list is used as the default user for the system. To preserve the standard
@@ -25,28 +26,40 @@ entry of the ``users`` list. Each entry in the ``users`` list, other than a
 config keys for an entry in ``users`` are as follows:
 
     - ``name``: The user's login name
-    - ``homedir``: Optional. Home dir for user. Default is ``/home/<username>``
-    - ``primary-group``: Optional. Primary group for user. Default to new group
-      named after user.
+    - ``expiredate``: Optional. Date on which the user's login will be
+      disabled. Default: none
+    - ``gecos``: Optional. Comment about the user, usually a comma-separated
+      string of real name and contact information. Default: none
     - ``groups``: Optional. Additional groups to add the user to. Default: none
-    - ``selinux-user``: Optional. SELinux user for user's login. Default to
-      default SELinux user.
-    - ``lock_passwd``: Optional. Disable password login. Default: true
+    - ``homedir``: Optional. Home dir for user. Default is ``/home/<username>``
     - ``inactive``: Optional. Mark user inactive. Default: false
-    - ``passwd``: Hash of user password
-    - ``no-create-home``: Optional. Do not create home directory. Default:
+    - ``lock_passwd``: Optional. Disable password login. Default: true
+    - ``no_create_home``: Optional. Do not create home directory. Default:
       false
-    - ``no-user-group``: Optional. Do not create group named after user.
-      Default: false
-    - ``no-log-init``: Optional. Do not initialize lastlog and faillog for
+    - ``no_log_init``: Optional. Do not initialize lastlog and faillog for
       user. Default: false
-    - ``ssh-import-id``: Optional. SSH id to import for user. Default: none
-    - ``ssh-autorized-keys``: Optional. List of ssh keys to add to user's
+    - ``no_user_group``: Optional. Do not create group named after user.
+      Default: false
+    - ``passwd``: Hash of user password
+    - ``primary_group``: Optional. Primary group for user. Default to new group
+      named after user.
+    - ``selinux_user``: Optional. SELinux user for user's login. Default to
+      default SELinux user.
+    - ``shell``: Optional. The user's login shell. The default is to set no
+      shell, which results in a system-specific default being used.
+    - ``snapuser``: Optional. Specify an email address to create the user as
+      a Snappy user through ``snap create-user``. If an Ubuntu SSO account is
+      associated with the address, username and SSH keys will be requested from
+      there. Default: none
+    - ``ssh_authorized_keys``: Optional. List of ssh keys to add to user's
       authkeys file. Default: none
-    - ``sudo``: Optional. Sudo rule to use, or list of sudo rules to use.
-      Default: none.
+    - ``ssh_import_id``: Optional. SSH id to import for user. Default: none
+    - ``sudo``: Optional. Sudo rule to use, list of sudo rules to use or False.
+      Default: none. An absence of sudo key, or a value of none or false
+      will result in no sudo rules being written for the user.
     - ``system``: Optional. Create user as system user with no home directory.
       Default: false
+    - ``uid``: Optional. The user's ID. Default: The next available value.
 
 .. note::
     Specifying a hash of a user's password with ``passwd`` is a security risk
@@ -65,23 +78,36 @@ config keys for an entry in ``users`` are as follows:
 **Config keys**::
 
     groups:
-        - ubuntu: [foo, bar]
-        - cloud-users
+        - <group>: [<user>, <user>]
+        - <group>
 
     users:
         - default
+        # User explicitly omitted from sudo permission; also default behavior.
+        - name: <some_restricted_user>
+          sudo: false
         - name: <username>
-          gecos: <real name>
-          primary-group: <primary group>
-          groups: <additional groups>
-          selinux-user: <selinux username>
           expiredate: <date>
-          ssh-import-id: <none/id>
-          lock_passwd: <true/false>
-          passwd: <password>
-          sudo: <sudo config>
+          gecos: <comment>
+          groups: <additional groups>
+          homedir: <home directory>
           inactive: <true/false>
+          lock_passwd: <true/false>
+          no_create_home: <true/false>
+          no_log_init: <true/false>
+          no_user_group: <true/false>
+          passwd: <password>
+          primary_group: <primary group>
+          selinux_user: <selinux username>
+          shell: <shell path>
+          snapuser: <email>
+          ssh_authorized_keys:
+              - <key>
+              - <key>
+          ssh_import_id: <id>
+          sudo: <sudo config>
           system: <true/false>
+          uid: <user id>
 """
 
 # Ensure this is aliased to a name not 'distros'

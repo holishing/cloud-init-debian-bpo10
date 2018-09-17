@@ -4,10 +4,14 @@
 #
 # This file is part of cloud-init. See LICENSE file for license information.
 
+# RELEASE_BLOCKER: Remove this deprecated module in 18.3
 """
-Snappy
-------
+Snap Config
+-----------
 **Summary:** snap_config modules allows configuration of snapd.
+
+**Deprecated**: Use :ref:`snap` module instead. This module will not exist
+in cloud-init 18.3.
 
 This module uses the same ``snappy`` namespace for configuration but
 acts only only a subset of the configuration.
@@ -87,7 +91,9 @@ def add_assertions(assertions=None):
         assertions = []
 
     if not isinstance(assertions, list):
-        raise ValueError('assertion parameter was not a list: %s', assertions)
+        raise ValueError(
+            'assertion parameter was not a list: {assertions}'.format(
+                assertions=assertions))
 
     snap_cmd = [SNAPPY_CMD, 'ack']
     combined = "\n".join(assertions)
@@ -115,7 +121,8 @@ def add_snap_user(cfg=None):
         cfg = {}
 
     if not isinstance(cfg, dict):
-        raise ValueError('configuration parameter was not a dict: %s', cfg)
+        raise ValueError(
+            'configuration parameter was not a dict: {cfg}'.format(cfg=cfg))
 
     snapuser = cfg.get('email', None)
     if not snapuser:
@@ -151,6 +158,9 @@ def handle(name, cfg, cloud, log, args):
         LOG.debug('No snappy config provided, skipping')
         return
 
+    log.warning(
+        'DEPRECATION: snap_config module will be dropped in 18.3 release.'
+        ' Use snap module instead')
     if not(util.system_is_snappy()):
         LOG.debug("%s: system not snappy", name)
         return

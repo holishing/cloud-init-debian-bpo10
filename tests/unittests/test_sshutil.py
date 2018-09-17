@@ -2,8 +2,9 @@
 
 from mock import patch
 
-from . import helpers as test_helpers
 from cloudinit import ssh_util
+from cloudinit.tests import helpers as test_helpers
+from cloudinit import util
 
 
 VALID_CONTENT = {
@@ -32,6 +33,22 @@ VALID_CONTENT = {
         "YWpMfYdPUnE7u536WqzFmsaqJctz3gBxH9Ex7dFtrxR4qiqEr9Qtlu3xGn7Bw07"
         "/+i1D+ey3ONkZLN+LQ714cgj8fRS4Hj29SCmXp5Kt5/82cD/VN3NtHw=="
     ),
+    'ecdsa-sha2-nistp256': (
+        "AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBMy/WuXq5MF"
+        "r5hVQ9EEKKUTF7vUaOkgxUh6bNsCs9SFMVslIm1zM/WJYwUv52LdEePjtDYiV4A"
+        "l2XthJ9/bs7Pc="
+    ),
+    'ecdsa-sha2-nistp521': (
+        "AAAAE2VjZHNhLXNoYTItbmlzdHA1MjEAAAAIbmlzdHA1MjEAAACFBABOdNTkh9F"
+        "McK4hZRLs5LTXBEXwNr0+Yg9uvJYRFcz2ZlnjYX9tM4Z3QQFjqogU4pU+zpKLqZ"
+        "5VE4Jcnb1T608UywBIdXkSFZT8trGJqBv9nFWGgmTX3KP8kiBbihpuv1cGwglPl"
+        "Hxs50A42iP0JiT7auGtEAGsu/uMql323GTGb4171Q=="
+    ),
+    'ecdsa-sha2-nistp384': (
+        "AAAAE2VjZHNhLXNoYTItbmlzdHAzODQAAAAIbmlzdHAzODQAAABhBAnoqFU9Gnl"
+        "LcsEuCJnobs/c6whzvjCgouaOO61kgXNtIxyF4Wkutg6xaGYgBBt/phb7a2TurI"
+        "bcIBuzJ/mP22UyUAbNnBfStAEBmYbrTf1EfiMCYUAr1XnL0UdYmZ8HFg=="
+    ),
 }
 
 TEST_OPTIONS = (
@@ -40,11 +57,18 @@ TEST_OPTIONS = (
     'user \"root\".\';echo;sleep 10"')
 
 
-class TestAuthKeyLineParser(test_helpers.TestCase):
+class TestAuthKeyLineParser(test_helpers.CiTestCase):
+
     def test_simple_parse(self):
         # test key line with common 3 fields (keytype, base64, comment)
         parser = ssh_util.AuthKeyLineParser()
-        for ktype in ['rsa', 'ecdsa', 'dsa']:
+        ecdsa_types = [
+            'ecdsa-sha2-nistp256',
+            'ecdsa-sha2-nistp384',
+            'ecdsa-sha2-nistp521',
+        ]
+
+        for ktype in ['rsa', 'ecdsa', 'dsa'] + ecdsa_types:
             content = VALID_CONTENT[ktype]
             comment = 'user-%s@host' % ktype
             line = ' '.join((ktype, content, comment,))
@@ -103,7 +127,49 @@ class TestAuthKeyLineParser(test_helpers.TestCase):
         self.assertFalse(key.valid())
 
 
-class TestParseSSHConfig(test_helpers.TestCase):
+class TestUpdateAuthorizedKeys(test_helpers.CiTestCase):
+
+    def test_new_keys_replace(self):
+        """new entries with the same base64 should replace old."""
+        orig_entries = [
+            ' '.join(('rsa', VALID_CONTENT['rsa'], 'orig_comment1')),
+            ' '.join(('dsa', VALID_CONTENT['dsa'], 'orig_comment2'))]
+
+        new_entries = [
+            ' '.join(('rsa', VALID_CONTENT['rsa'], 'new_comment1')), ]
+
+        expected = '\n'.join([new_entries[0], orig_entries[1]]) + '\n'
+
+        parser = ssh_util.AuthKeyLineParser()
+        found = ssh_util.update_authorized_keys(
+            [parser.parse(p) for p in orig_entries],
+            [parser.parse(p) for p in new_entries])
+
+        self.assertEqual(expected, found)
+
+    def test_new_invalid_keys_are_ignored(self):
+        """new entries that are invalid should be skipped."""
+        orig_entries = [
+            ' '.join(('rsa', VALID_CONTENT['rsa'], 'orig_comment1')),
+            ' '.join(('dsa', VALID_CONTENT['dsa'], 'orig_comment2'))]
+
+        new_entries = [
+            ' '.join(('rsa', VALID_CONTENT['rsa'], 'new_comment1')),
+            'xxx-invalid-thing1',
+            'xxx-invalid-blob2'
+        ]
+
+        expected = '\n'.join([new_entries[0], orig_entries[1]]) + '\n'
+
+        parser = ssh_util.AuthKeyLineParser()
+        found = ssh_util.update_authorized_keys(
+            [parser.parse(p) for p in orig_entries],
+            [parser.parse(p) for p in new_entries])
+
+        self.assertEqual(expected, found)
+
+
+class TestParseSSHConfig(test_helpers.CiTestCase):
 
     def setUp(self):
         self.load_file_patch = patch('cloudinit.ssh_util.util.load_file')
@@ -169,5 +235,95 @@ class TestParseSSHConfig(test_helpers.TestCase):
         self.assertEqual(1, len(ret))
         self.assertEqual('foo', ret[0].key)
         self.assertEqual('bar', ret[0].value)
+
+
+class TestUpdateSshConfigLines(test_helpers.CiTestCase):
+    """Test the update_ssh_config_lines method."""
+    exlines = [
+        "#PasswordAuthentication yes",
+        "UsePAM yes",
+        "# Comment line",
+        "AcceptEnv LANG LC_*",
+        "X11Forwarding no",
+    ]
+    pwauth = "PasswordAuthentication"
+
+    def check_line(self, line, opt, val):
+        self.assertEqual(line.key, opt.lower())
+        self.assertEqual(line.value, val)
+        self.assertIn(opt, str(line))
+        self.assertIn(val, str(line))
+
+    def test_new_option_added(self):
+        """A single update of non-existing option."""
+        lines = ssh_util.parse_ssh_config_lines(list(self.exlines))
+        result = ssh_util.update_ssh_config_lines(lines, {'MyKey': 'MyVal'})
+        self.assertEqual(['MyKey'], result)
+        self.check_line(lines[-1], "MyKey", "MyVal")
+
+    def test_commented_out_not_updated_but_appended(self):
+        """Implementation does not un-comment and update lines."""
+        lines = ssh_util.parse_ssh_config_lines(list(self.exlines))
+        result = ssh_util.update_ssh_config_lines(lines, {self.pwauth: "no"})
+        self.assertEqual([self.pwauth], result)
+        self.check_line(lines[-1], self.pwauth, "no")
+
+    def test_single_option_updated(self):
+        """A single update should have change made and line updated."""
+        opt, val = ("UsePAM", "no")
+        lines = ssh_util.parse_ssh_config_lines(list(self.exlines))
+        result = ssh_util.update_ssh_config_lines(lines, {opt: val})
+        self.assertEqual([opt], result)
+        self.check_line(lines[1], opt, val)
+
+    def test_multiple_updates_with_add(self):
+        """Verify multiple updates some added some changed, some not."""
+        updates = {"UsePAM": "no", "X11Forwarding": "no", "NewOpt": "newval",
+                   "AcceptEnv": "LANG ADD LC_*"}
+        lines = ssh_util.parse_ssh_config_lines(list(self.exlines))
+        result = ssh_util.update_ssh_config_lines(lines, updates)
+        self.assertEqual(set(["UsePAM", "NewOpt", "AcceptEnv"]), set(result))
+        self.check_line(lines[3], "AcceptEnv", updates["AcceptEnv"])
+
+    def test_return_empty_if_no_changes(self):
+        """If there are no changes, then return should be empty list."""
+        updates = {"UsePAM": "yes"}
+        lines = ssh_util.parse_ssh_config_lines(list(self.exlines))
+        result = ssh_util.update_ssh_config_lines(lines, updates)
+        self.assertEqual([], result)
+        self.assertEqual(self.exlines, [str(l) for l in lines])
+
+    def test_keycase_not_modified(self):
+        """Original case of key should not be changed on update.
+        This behavior is to keep original config as much intact as can be."""
+        updates = {"usepam": "no"}
+        lines = ssh_util.parse_ssh_config_lines(list(self.exlines))
+        result = ssh_util.update_ssh_config_lines(lines, updates)
+        self.assertEqual(["usepam"], result)
+        self.assertEqual("UsePAM no", str(lines[1]))
+
+
+class TestUpdateSshConfig(test_helpers.CiTestCase):
+    cfgdata = '\n'.join(["#Option val", "MyKey ORIG_VAL", ""])
+
+    def test_modified(self):
+        mycfg = self.tmp_path("ssh_config_1")
+        util.write_file(mycfg, self.cfgdata)
+        ret = ssh_util.update_ssh_config({"MyKey": "NEW_VAL"}, mycfg)
+        self.assertTrue(ret)
+        found = util.load_file(mycfg)
+        self.assertEqual(self.cfgdata.replace("ORIG_VAL", "NEW_VAL"), found)
+        # assert there is a newline at end of file (LP: #1677205)
+        self.assertEqual('\n', found[-1])
+
+    def test_not_modified(self):
+        mycfg = self.tmp_path("ssh_config_2")
+        util.write_file(mycfg, self.cfgdata)
+        with patch("cloudinit.ssh_util.util.write_file") as m_write_file:
+            ret = ssh_util.update_ssh_config({"MyKey": "ORIG_VAL"}, mycfg)
+        self.assertFalse(ret)
+        self.assertEqual(self.cfgdata, util.load_file(mycfg))
+        m_write_file.assert_not_called()
+
 
 # vi: ts=4 expandtab

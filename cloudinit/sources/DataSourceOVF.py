@@ -21,14 +21,18 @@ from cloudinit import util
 
 from cloudinit.sources.helpers.vmware.imc.config \
     import Config
+from cloudinit.sources.helpers.vmware.imc.config_custom_script \
+    import PreCustomScript, PostCustomScript
 from cloudinit.sources.helpers.vmware.imc.config_file \
     import ConfigFile
 from cloudinit.sources.helpers.vmware.imc.config_nic \
     import NicConfigurator
+from cloudinit.sources.helpers.vmware.imc.config_passwd \
+    import PasswordConfigurator
 from cloudinit.sources.helpers.vmware.imc.guestcust_error \
     import GuestCustErrorEnum
 from cloudinit.sources.helpers.vmware.imc.guestcust_event \
-    import GuestCustEventEnum
+    import GuestCustEventEnum as GuestCustEvent
 from cloudinit.sources.helpers.vmware.imc.guestcust_state \
     import GuestCustStateEnum
 from cloudinit.sources.helpers.vmware.imc.guestcust_util import (
@@ -41,6 +45,9 @@ LOG = logging.getLogger(__name__)
 
 
 class DataSourceOVF(sources.DataSource):
+
+    dsname = "OVF"
+
     def __init__(self, sys_cfg, distro, paths):
         sources.DataSource.__init__(self, sys_cfg, distro, paths)
         self.seed = None
@@ -48,17 +55,22 @@ class DataSourceOVF(sources.DataSource):
         self.environment = None
         self.cfg = {}
         self.supported_seed_starts = ("/", "file://")
+        self.vmware_customization_supported = True
+        self._network_config = None
+        self._vmware_nics_to_enable = None
+        self._vmware_cust_conf = None
+        self._vmware_cust_found = False
 
     def __str__(self):
         root = sources.DataSource.__str__(self)
         return "%s [seed=%s]" % (root, self.seed)
 
-    def get_data(self):
+    def _get_data(self):
         found = []
         md = {}
         ud = ""
-        vmwarePlatformFound = False
-        vmwareImcConfigFilePath = ''
+        vmwareImcConfigFilePath = None
+        nicspath = None
 
         defaults = {
             "instance-id": "iid-dsovf",
@@ -78,69 +90,147 @@ class DataSourceOVF(sources.DataSource):
             found.append(seed)
         elif system_type and 'vmware' in system_type.lower():
             LOG.debug("VMware Virtualization Platform found")
-            if not util.get_cfg_option_bool(
+            if not self.vmware_customization_supported:
+                LOG.debug("Skipping the check for "
+                          "VMware Customization support")
+            elif not util.get_cfg_option_bool(
                     self.sys_cfg, "disable_vmware_customization", True):
-                deployPkgPluginPath = search_file("/usr/lib/vmware-tools",
-                                                  "libdeployPkgPlugin.so")
-                if not deployPkgPluginPath:
-                    deployPkgPluginPath = search_file("/usr/lib/open-vm-tools",
-                                                      "libdeployPkgPlugin.so")
+
+                search_paths = (
+                    "/usr/lib/vmware-tools", "/usr/lib64/vmware-tools",
+                    "/usr/lib/open-vm-tools", "/usr/lib64/open-vm-tools")
+
+                plugin = "libdeployPkgPlugin.so"
+                deployPkgPluginPath = None
+                for path in search_paths:
+                    deployPkgPluginPath = search_file(path, plugin)
+                    if deployPkgPluginPath:
+                        LOG.debug("Found the customization plugin at %s",
+                                  deployPkgPluginPath)
+                        break
+
                 if deployPkgPluginPath:
                     # When the VM is powered on, the "VMware Tools" daemon
                     # copies the customization specification file to
                     # /var/run/vmware-imc directory. cloud-init code needs
                     # to search for the file in that directory.
+                    max_wait = get_max_wait_from_cfg(self.ds_cfg)
                     vmwareImcConfigFilePath = util.log_time(
                         logfunc=LOG.debug,
                         msg="waiting for configuration file",
                         func=wait_for_imc_cfg_file,
-                        args=("/var/run/vmware-imc", "cust.cfg"))
+                        args=("cust.cfg", max_wait))
+                else:
+                    LOG.debug("Did not find the customization plugin.")
 
                 if vmwareImcConfigFilePath:
-                    LOG.debug("Found VMware DeployPkg Config File at %s" %
+                    LOG.debug("Found VMware Customization Config File at %s",
                               vmwareImcConfigFilePath)
+                    nicspath = wait_for_imc_cfg_file(
+                        filename="nics.txt", maxwait=10, naplen=5)
                 else:
-                    LOG.debug("Did not find VMware DeployPkg Config File Path")
+                    LOG.debug("Did not find VMware Customization Config File")
             else:
                 LOG.debug("Customization for VMware platform is disabled.")
 
         if vmwareImcConfigFilePath:
-            nics = ""
+            self._vmware_nics_to_enable = ""
             try:
                 cf = ConfigFile(vmwareImcConfigFilePath)
-                conf = Config(cf)
-                (md, ud, cfg) = read_vmware_imc(conf)
-                dirpath = os.path.dirname(vmwareImcConfigFilePath)
-                nics = get_nics_to_enable(dirpath)
+                self._vmware_cust_conf = Config(cf)
+                (md, ud, cfg) = read_vmware_imc(self._vmware_cust_conf)
+                self._vmware_nics_to_enable = get_nics_to_enable(nicspath)
+                imcdirpath = os.path.dirname(vmwareImcConfigFilePath)
+                product_marker = self._vmware_cust_conf.marker_id
+                hasmarkerfile = check_marker_exists(
+                    product_marker, os.path.join(self.paths.cloud_dir, 'data'))
+                special_customization = product_marker and not hasmarkerfile
+                customscript = self._vmware_cust_conf.custom_script_name
             except Exception as e:
-                LOG.debug("Error parsing the customization Config File")
-                LOG.exception(e)
-                set_customization_status(
-                    GuestCustStateEnum.GUESTCUST_STATE_RUNNING,
-                    GuestCustEventEnum.GUESTCUST_EVENT_CUSTOMIZE_FAILED)
-                enable_nics(nics)
-                return False
-            finally:
-                util.del_dir(os.path.dirname(vmwareImcConfigFilePath))
+                _raise_error_status(
+                    "Error parsing the customization Config File",
+                    e,
+                    GuestCustEvent.GUESTCUST_EVENT_CUSTOMIZE_FAILED,
+                    vmwareImcConfigFilePath)
+
+            if special_customization:
+                if customscript:
+                    try:
+                        precust = PreCustomScript(customscript, imcdirpath)
+                        precust.execute()
+                    except Exception as e:
+                        _raise_error_status(
+                            "Error executing pre-customization script",
+                            e,
+                            GuestCustEvent.GUESTCUST_EVENT_CUSTOMIZE_FAILED,
+                            vmwareImcConfigFilePath)
 
             try:
-                LOG.debug("Applying the Network customization")
-                nicConfigurator = NicConfigurator(conf.nics)
-                nicConfigurator.configure()
+                LOG.debug("Preparing the Network configuration")
+                self._network_config = get_network_config_from_conf(
+                    self._vmware_cust_conf,
+                    True,
+                    True,
+                    self.distro.osfamily)
             except Exception as e:
-                LOG.debug("Error applying the Network Configuration")
-                LOG.exception(e)
-                set_customization_status(
-                    GuestCustStateEnum.GUESTCUST_STATE_RUNNING,
-                    GuestCustEventEnum.GUESTCUST_EVENT_NETWORK_SETUP_FAILED)
-                enable_nics(nics)
-                return False
+                _raise_error_status(
+                    "Error preparing Network Configuration",
+                    e,
+                    GuestCustEvent.GUESTCUST_EVENT_NETWORK_SETUP_FAILED,
+                    vmwareImcConfigFilePath)
 
-            vmwarePlatformFound = True
+            if special_customization:
+                LOG.debug("Applying password customization")
+                pwdConfigurator = PasswordConfigurator()
+                adminpwd = self._vmware_cust_conf.admin_password
+                try:
+                    resetpwd = self._vmware_cust_conf.reset_password
+                    if adminpwd or resetpwd:
+                        pwdConfigurator.configure(adminpwd, resetpwd,
+                                                  self.distro)
+                    else:
+                        LOG.debug("Changing password is not needed")
+                except Exception as e:
+                    _raise_error_status(
+                        "Error applying Password Configuration",
+                        e,
+                        GuestCustEvent.GUESTCUST_EVENT_CUSTOMIZE_FAILED,
+                        vmwareImcConfigFilePath)
+
+                if customscript:
+                    try:
+                        postcust = PostCustomScript(customscript, imcdirpath)
+                        postcust.execute()
+                    except Exception as e:
+                        _raise_error_status(
+                            "Error executing post-customization script",
+                            e,
+                            GuestCustEvent.GUESTCUST_EVENT_CUSTOMIZE_FAILED,
+                            vmwareImcConfigFilePath)
+
+            if product_marker:
+                try:
+                    setup_marker_files(
+                        product_marker,
+                        os.path.join(self.paths.cloud_dir, 'data'))
+                except Exception as e:
+                    _raise_error_status(
+                        "Error creating marker files",
+                        e,
+                        GuestCustEvent.GUESTCUST_EVENT_CUSTOMIZE_FAILED,
+                        vmwareImcConfigFilePath)
+
+            self._vmware_cust_found = True
+            found.append('vmware-tools')
+
+            # TODO: Need to set the status to DONE only when the
+            # customization is done successfully.
+            util.del_dir(os.path.dirname(vmwareImcConfigFilePath))
+            enable_nics(self._vmware_nics_to_enable)
             set_customization_status(
                 GuestCustStateEnum.GUESTCUST_STATE_DONE,
                 GuestCustErrorEnum.GUESTCUST_ERROR_SUCCESS)
-            enable_nics(nics)
+
         else:
             np = {'iso': transport_iso9660,
                   'vmware-guestd': transport_vmware_guestd, }
@@ -155,7 +245,7 @@ class DataSourceOVF(sources.DataSource):
                 found.append(name)
 
         # There was no OVF transports found
-        if len(found) == 0 and not vmwarePlatformFound:
+        if len(found) == 0:
             return False
 
         if 'seedfrom' in md and md['seedfrom']:
@@ -200,24 +290,73 @@ class DataSourceOVF(sources.DataSource):
     def get_config_obj(self):
         return self.cfg
 
+    @property
+    def network_config(self):
+        return self._network_config
+
 
 class DataSourceOVFNet(DataSourceOVF):
     def __init__(self, sys_cfg, distro, paths):
         DataSourceOVF.__init__(self, sys_cfg, distro, paths)
         self.seed_dir = os.path.join(paths.seed_dir, 'ovf-net')
         self.supported_seed_starts = ("http://", "https://", "ftp://")
+        self.vmware_customization_supported = False
 
 
-def wait_for_imc_cfg_file(dirpath, filename, maxwait=180, naplen=5):
+def get_max_wait_from_cfg(cfg):
+    default_max_wait = 90
+    max_wait_cfg_option = 'vmware_cust_file_max_wait'
+    max_wait = default_max_wait
+
+    if not cfg:
+        return max_wait
+
+    try:
+        max_wait = int(cfg.get(max_wait_cfg_option, default_max_wait))
+    except ValueError:
+        LOG.warning("Failed to get '%s', using %s",
+                    max_wait_cfg_option, default_max_wait)
+
+    if max_wait <= 0:
+        LOG.warning("Invalid value '%s' for '%s', using '%s' instead",
+                    max_wait, max_wait_cfg_option, default_max_wait)
+        max_wait = default_max_wait
+
+    return max_wait
+
+
+def wait_for_imc_cfg_file(filename, maxwait=180, naplen=5,
+                          dirpath="/var/run/vmware-imc"):
     waited = 0
 
     while waited < maxwait:
-        fileFullPath = search_file(dirpath, filename)
-        if fileFullPath:
+        fileFullPath = os.path.join(dirpath, filename)
+        if os.path.isfile(fileFullPath):
             return fileFullPath
+        LOG.debug("Waiting for VMware Customization Config File")
         time.sleep(naplen)
         waited += naplen
     return None
+
+
+def get_network_config_from_conf(config, use_system_devices=True,
+                                 configure=False, osfamily=None):
+    nicConfigurator = NicConfigurator(config.nics, use_system_devices)
+    nics_cfg_list = nicConfigurator.generate(configure, osfamily)
+
+    return get_network_config(nics_cfg_list,
+                              config.name_servers,
+                              config.dns_suffixes)
+
+
+def get_network_config(nics=None, nameservers=None, search=None):
+    config_list = nics
+
+    if nameservers or search:
+        config_list.append({'type': 'nameserver', 'address': nameservers,
+                            'search': search})
+
+    return {'version': 1, 'config': config_list}
 
 
 # This will return a dict with some content
@@ -235,6 +374,9 @@ def read_vmware_imc(config):
     if config.timezone:
         cfg['timezone'] = config.timezone
 
+    # Generate a unique instance-id so that re-customization will
+    # happen in cloud-init
+    md['instance-id'] = "iid-vmware-" + util.rand_str(strlen=8)
     return (md, ud, cfg)
 
 
@@ -277,18 +419,48 @@ def get_ovf_env(dirname):
     return (None, False)
 
 
+def maybe_cdrom_device(devname):
+    """Test if devname matches known list of devices which may contain iso9660
+       filesystems.
+
+    Be helpful in accepting either knames (with no leading /dev/) or full path
+    names, but do not allow paths outside of /dev/, like /dev/foo/bar/xxx.
+    """
+    if not devname:
+        return False
+    elif not isinstance(devname, util.string_types):
+        raise ValueError("Unexpected input for devname: %s" % devname)
+
+    # resolve '..' and multi '/' elements
+    devname = os.path.normpath(devname)
+
+    # drop leading '/dev/'
+    if devname.startswith("/dev/"):
+        # partition returns tuple (before, partition, after)
+        devname = devname.partition("/dev/")[-1]
+
+    # ignore leading slash (/sr0), else fail on / in name (foo/bar/xvdc)
+    if devname.startswith("/"):
+        devname = devname.split("/")[-1]
+    elif devname.count("/") > 0:
+        return False
+
+    # if empty string
+    if not devname:
+        return False
+
+    # default_regex matches values in /lib/udev/rules.d/60-cdrom_id.rules
+    # KERNEL!="sr[0-9]*|hd[a-z]|xvd*", GOTO="cdrom_end"
+    default_regex = r"^(sr[0-9]+|hd[a-z]|xvd.*)"
+    devname_regex = os.environ.get("CLOUD_INIT_CDROM_DEV_REGEX", default_regex)
+    cdmatch = re.compile(devname_regex)
+
+    return cdmatch.match(devname) is not None
+
+
 # Transport functions take no input and return
 # a 3 tuple of content, path, filename
 def transport_iso9660(require_iso=True):
-
-    # default_regex matches values in
-    # /lib/udev/rules.d/60-cdrom_id.rules
-    # KERNEL!="sr[0-9]*|hd[a-z]|xvd*", GOTO="cdrom_end"
-    envname = "CLOUD_INIT_CDROM_DEV_REGEX"
-    default_regex = "^(sr[0-9]+|hd[a-z]|xvd.*)"
-
-    devname_regex = os.environ.get(envname, default_regex)
-    cdmatch = re.compile(devname_regex)
 
     # Go through mounts to see if it was already mounted
     mounts = util.mounts()
@@ -296,7 +468,7 @@ def transport_iso9660(require_iso=True):
         fstype = info['fstype']
         if fstype != "iso9660" and require_iso:
             continue
-        if cdmatch.match(dev[5:]) is None:  # take off '/dev/'
+        if not maybe_cdrom_device(dev):
             continue
         mp = info['mountpoint']
         (fname, contents) = get_ovf_env(mp)
@@ -308,29 +480,19 @@ def transport_iso9660(require_iso=True):
     else:
         mtype = None
 
-    devs = os.listdir("/dev/")
-    devs.sort()
+    # generate a list of devices with mtype filesystem, filter by regex
+    devs = [dev for dev in
+            util.find_devs_with("TYPE=%s" % mtype if mtype else None)
+            if maybe_cdrom_device(dev)]
     for dev in devs:
-        fullp = os.path.join("/dev/", dev)
-
-        if (fullp in mounts or
-                not cdmatch.match(dev) or os.path.isdir(fullp)):
-            continue
-
         try:
-            # See if we can read anything at all...??
-            util.peek_file(fullp, 512)
-        except IOError:
-            continue
-
-        try:
-            (fname, contents) = util.mount_cb(fullp, get_ovf_env, mtype=mtype)
+            (fname, contents) = util.mount_cb(dev, get_ovf_env, mtype=mtype)
         except util.MountFailedError:
-            LOG.debug("%s not mountable as iso9660" % fullp)
+            LOG.debug("%s not mountable as iso9660", dev)
             continue
 
         if contents is not False:
-            return (contents, fullp, fname)
+            return (contents, dev, fname)
 
     return (False, None, None)
 
@@ -394,7 +556,7 @@ def search_file(dirpath, filename):
     if not dirpath or not filename:
         return None
 
-    for root, dirs, files in os.walk(dirpath):
+    for root, _dirs, files in os.walk(dirpath):
         if filename in files:
             return os.path.join(root, filename)
 
@@ -415,5 +577,55 @@ datasources = (
 # Return a list of data sources that match this set of dependencies
 def get_datasource_list(depends):
     return sources.list_from_depends(depends, datasources)
+
+
+# To check if marker file exists
+def check_marker_exists(markerid, marker_dir):
+    """
+    Check the existence of a marker file.
+    Presence of marker file determines whether a certain code path is to be
+    executed. It is needed for partial guest customization in VMware.
+    @param markerid: is an unique string representing a particular product
+                     marker.
+    @param: marker_dir: The directory in which markers exist.
+    """
+    if not markerid:
+        return False
+    markerfile = os.path.join(marker_dir, ".markerfile-" + markerid + ".txt")
+    if os.path.exists(markerfile):
+        return True
+    return False
+
+
+# Create a marker file
+def setup_marker_files(markerid, marker_dir):
+    """
+    Create a new marker file.
+    Marker files are unique to a full customization workflow in VMware
+    environment.
+    @param markerid: is an unique string representing a particular product
+                     marker.
+    @param: marker_dir: The directory in which markers exist.
+
+    """
+    LOG.debug("Handle marker creation")
+    markerfile = os.path.join(marker_dir, ".markerfile-" + markerid + ".txt")
+    for fname in os.listdir(marker_dir):
+        if fname.startswith(".markerfile"):
+            util.del_file(os.path.join(marker_dir, fname))
+    open(markerfile, 'w').close()
+
+
+def _raise_error_status(prefix, error, event, config_file):
+    """
+    Raise error and send customization status to the underlying VMware
+    Virtualization Platform. Also, cleanup the imc directory.
+    """
+    LOG.debug('%s: %s', prefix, error)
+    set_customization_status(
+        GuestCustStateEnum.GUESTCUST_STATE_RUNNING,
+        event)
+    util.del_dir(os.path.dirname(config_file))
+    raise error
 
 # vi: ts=4 expandtab

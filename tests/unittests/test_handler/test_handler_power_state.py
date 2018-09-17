@@ -4,23 +4,20 @@ import sys
 
 from cloudinit.config import cc_power_state_change as psc
 
-from .. import helpers as t_help
-from ..helpers import mock
+from cloudinit.tests import helpers as t_help
+from cloudinit.tests.helpers import mock
 
 
 class TestLoadPowerState(t_help.TestCase):
-    def setUp(self):
-        super(self.__class__, self).setUp()
-
     def test_no_config(self):
         # completely empty config should mean do nothing
         (cmd, _timeout, _condition) = psc.load_power_state({})
-        self.assertEqual(cmd, None)
+        self.assertIsNone(cmd)
 
     def test_irrelevant_config(self):
         # no power_state field in config should return None for cmd
         (cmd, _timeout, _condition) = psc.load_power_state({'foo': 'bar'})
-        self.assertEqual(cmd, None)
+        self.assertIsNone(cmd)
 
     def test_invalid_mode(self):
         cfg = {'power_state': {'mode': 'gibberish'}}

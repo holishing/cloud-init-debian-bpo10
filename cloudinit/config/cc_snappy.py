@@ -1,9 +1,13 @@
 # This file is part of cloud-init. See LICENSE file for license information.
 
+# RELEASE_BLOCKER: Remove this deprecated module in 18.3
 """
 Snappy
 ------
 **Summary:** snappy modules allows configuration of snappy.
+
+**Deprecated**: Use :ref:`snap` module instead. This module will not exist
+in cloud-init 18.3.
 
 The below example config config would install ``etcd``, and then install
 ``pkg2.smoser`` with a ``<config-file>`` argument where ``config-file`` has
@@ -63,11 +67,11 @@ is ``auto``. Options are:
 
 from cloudinit import log as logging
 from cloudinit.settings import PER_INSTANCE
+from cloudinit import temp_utils
 from cloudinit import util
 
 import glob
 import os
-import tempfile
 
 LOG = logging.getLogger(__name__)
 
@@ -183,7 +187,7 @@ def render_snap_op(op, name, path=None, cfgfile=None, config=None):
             #      config
             # Note, however, we do not touch config files on disk.
             nested_cfg = {'config': {shortname: config}}
-            (fd, cfg_tmpf) = tempfile.mkstemp()
+            (fd, cfg_tmpf) = temp_utils.mkstemp()
             os.write(fd, util.yaml_dumps(nested_cfg).encode())
             os.close(fd)
             cfgfile = cfg_tmpf
@@ -209,7 +213,7 @@ def render_snap_op(op, name, path=None, cfgfile=None, config=None):
 
 def read_installed_packages():
     ret = []
-    for (name, date, version, dev) in read_pkg_data():
+    for (name, _date, _version, dev) in read_pkg_data():
         if dev:
             ret.append(NAMESPACE_DELIM.join([name, dev]))
         else:
@@ -218,7 +222,7 @@ def read_installed_packages():
 
 
 def read_pkg_data():
-    out, err = util.subp([SNAPPY_CMD, "list"])
+    out, _err = util.subp([SNAPPY_CMD, "list"])
     pkg_data = []
     for line in out.splitlines()[1:]:
         toks = line.split(sep=None, maxsplit=3)
@@ -271,6 +275,10 @@ def handle(name, cfg, cloud, log, args):
         LOG.debug("%s: 'auto' mode, and system not snappy", name)
         return
 
+    log.warning(
+        'DEPRECATION: snappy module will be dropped in 18.3 release.'
+        ' Use snap module instead')
+
     set_snappy_command()
 
     pkg_ops = get_package_ops(packages=mycfg['packages'],
@@ -283,8 +291,8 @@ def handle(name, cfg, cloud, log, args):
             render_snap_op(**pkg_op)
         except Exception as e:
             fails.append((pkg_op, e,))
-            LOG.warn("'%s' failed for '%s': %s",
-                     pkg_op['op'], pkg_op['name'], e)
+            LOG.warning("'%s' failed for '%s': %s",
+                        pkg_op['op'], pkg_op['name'], e)
 
     # Default to disabling SSH
     ssh_enabled = mycfg.get('ssh_enabled', "auto")
@@ -303,7 +311,7 @@ def handle(name, cfg, cloud, log, args):
             LOG.debug("Enabling SSH, password authentication requested")
             ssh_enabled = True
     elif ssh_enabled not in (True, False):
-        LOG.warn("Unknown value '%s' in ssh_enabled", ssh_enabled)
+        LOG.warning("Unknown value '%s' in ssh_enabled", ssh_enabled)
 
     disable_enable_ssh(ssh_enabled)
 

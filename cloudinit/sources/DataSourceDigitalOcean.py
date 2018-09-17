@@ -27,6 +27,9 @@ MD_USE_IPV4LL = True
 
 
 class DataSourceDigitalOcean(sources.DataSource):
+
+    dsname = 'DigitalOcean'
+
     def __init__(self, sys_cfg, distro, paths):
         sources.DataSource.__init__(self, sys_cfg, distro, paths)
         self.distro = distro
@@ -44,14 +47,14 @@ class DataSourceDigitalOcean(sources.DataSource):
     def _get_sysinfo(self):
         return do_helper.read_sysinfo()
 
-    def get_data(self):
+    def _get_data(self):
         (is_do, droplet_id) = self._get_sysinfo()
 
         # only proceed if we know we are on DigitalOcean
         if not is_do:
             return False
 
-        LOG.info("Running on digital ocean. droplet_id=%s" % droplet_id)
+        LOG.info("Running on digital ocean. droplet_id=%s", droplet_id)
 
         ipv4LL_nic = None
         if self.use_ip4LL:

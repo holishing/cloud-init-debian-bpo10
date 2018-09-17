@@ -21,7 +21,7 @@ from cloudinit import sources
 from cloudinit import url_helper
 from cloudinit import util
 
-# For reference: http://tinyurl.com/laora4c
+# See https://docs.openstack.org/user-guide/cli-config-drive.html
 
 LOG = logging.getLogger(__name__)
 
@@ -52,6 +52,7 @@ OS_VERSIONS = (
 PHYSICAL_TYPES = (
     None,
     'bridge',
+    'dvs',
     'ethernet',
     'hw_veb',
     'hyperv',
@@ -637,7 +638,7 @@ def convert_net_json(network_json=None, known_macs=None):
             known_macs = net.get_interfaces_by_mac()
 
         # go through and fill out the link_id_info with names
-        for link_id, info in link_id_info.items():
+        for _link_id, info in link_id_info.items():
             if info.get('name'):
                 continue
             if info.get('mac') in known_macs:

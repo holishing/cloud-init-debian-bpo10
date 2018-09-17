@@ -56,7 +56,8 @@ class Cloud(object):
     def get_template_filename(self, name):
         fn = self.paths.template_tpl % (name)
         if not os.path.isfile(fn):
-            LOG.warn("No template found at %s for template named %s", fn, name)
+            LOG.warning("No template found in %s for template named %s",
+                        os.path.dirname(fn), name)
             return None
         return fn
 
@@ -77,8 +78,9 @@ class Cloud(object):
     def get_locale(self):
         return self.datasource.get_locale()
 
-    def get_hostname(self, fqdn=False):
-        return self.datasource.get_hostname(fqdn=fqdn)
+    def get_hostname(self, fqdn=False, metadata_only=False):
+        return self.datasource.get_hostname(
+            fqdn=fqdn, metadata_only=metadata_only)
 
     def device_name_to_device(self, name):
         return self.datasource.device_name_to_device(name)

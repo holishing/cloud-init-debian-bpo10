@@ -37,7 +37,7 @@ fs_setup:
 # Default disk definitions for SmartOS
 # ------------------------------------
 
-device_aliases: {'ephemeral0': '/dev/sdb'}
+device_aliases: {'ephemeral0': '/dev/vdb'}
 disk_setup:
     ephemeral0:
          table_type: mbr
@@ -46,7 +46,7 @@ disk_setup:
 
 fs_setup:
     - label: ephemeral0
-      filesystem: ext3
+      filesystem: ext4
       device: ephemeral0.0
 
 # Cavaut for SmartOS: if ephemeral disk is not defined, then the disk will
@@ -98,11 +98,11 @@ disk_setup:
 #
 #    table_type=<TYPE>: Currently the following are supported:
 #                    'mbr': default and setups a MS-DOS partition table
+#                    'gpt': setups a GPT partition table
 #
-#                Note: At this time only 'mbr' partition tables are allowed.
-#                    It is anticipated in the future that we'll have GPT as
-#                    option in the future, or even "RAID" to create a mdadm
-#                    RAID.
+#                Note: At this time only 'mbr' and 'gpt' partition tables
+#                    are allowed. It is anticipated in the future that
+#                    we'll also have "RAID" to create a mdadm RAID.
 #
 #    layout={...}: The device layout. This is a list of values, with the
 #                percentage of disk that partition will take.
@@ -155,11 +155,11 @@ fs_setup:
      filesystem: 'ext3'
      device: 'ephemeral0'
      partition: 'auto'
-   - label:  mylabl2
+   - label: mylabl2
      filesystem: 'ext4'
      device: '/dev/xvda1'
-   - special:
-     cmd: mkfs -t %(FILESYSTEM)s -L %(LABEL)s %(DEVICE)s
+   - cmd: mkfs -t %(filesystem)s -L %(label)s %(device)s
+     label: mylabl3
      filesystem: 'btrfs'
      device: '/dev/xvdh'
 

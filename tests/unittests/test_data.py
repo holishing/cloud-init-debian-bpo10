@@ -18,6 +18,8 @@ from email.mime.application import MIMEApplication
 from email.mime.base import MIMEBase
 from email.mime.multipart import MIMEMultipart
 
+import httpretty
+
 from cloudinit import handlers
 from cloudinit import helpers as c_helpers
 from cloudinit import log
@@ -27,7 +29,7 @@ from cloudinit import stages
 from cloudinit import user_data as ud
 from cloudinit import util
 
-from . import helpers
+from cloudinit.tests import helpers
 
 
 INSTANCE_ID = "i-testing"
@@ -523,6 +525,63 @@ c: 4
         self.assertEqual(cfg.get('locale'), 'chicago')
 
 
+class TestConsumeUserDataHttp(TestConsumeUserData, helpers.HttprettyTestCase):
+
+    def setUp(self):
+        TestConsumeUserData.setUp(self)
+        helpers.HttprettyTestCase.setUp(self)
+
+    def tearDown(self):
+        TestConsumeUserData.tearDown(self)
+        helpers.HttprettyTestCase.tearDown(self)
+
+    @mock.patch('cloudinit.url_helper.time.sleep')
+    def test_include(self, mock_sleep):
+        """Test #include."""
+        included_url = 'http://hostname/path'
+        included_data = '#cloud-config\nincluded: true\n'
+        httpretty.register_uri(httpretty.GET, included_url, included_data)
+
+        blob = '#include\n%s\n' % included_url
+
+        self.reRoot()
+        ci = stages.Init()
+        ci.datasource = FakeDataSource(blob)
+        ci.fetch()
+        ci.consume_data()
+        cc_contents = util.load_file(ci.paths.get_ipath("cloud_config"))
+        cc = util.load_yaml(cc_contents)
+        self.assertTrue(cc.get('included'))
+
+    @mock.patch('cloudinit.url_helper.time.sleep')
+    def test_include_bad_url(self, mock_sleep):
+        """Test #include with a bad URL."""
+        bad_url = 'http://bad/forbidden'
+        bad_data = '#cloud-config\nbad: true\n'
+        httpretty.register_uri(httpretty.GET, bad_url, bad_data, status=403)
+
+        included_url = 'http://hostname/path'
+        included_data = '#cloud-config\nincluded: true\n'
+        httpretty.register_uri(httpretty.GET, included_url, included_data)
+
+        blob = '#include\n%s\n%s' % (bad_url, included_url)
+
+        self.reRoot()
+        ci = stages.Init()
+        ci.datasource = FakeDataSource(blob)
+        log_file = self.capture_log(logging.WARNING)
+        ci.fetch()
+        ci.consume_data()
+
+        self.assertIn("403 Client Error: Forbidden for url: %s" % bad_url,
+                      log_file.getvalue())
+
+        cc_contents = util.load_file(ci.paths.get_ipath("cloud_config"))
+        cc = util.load_yaml(cc_contents)
+        self.assertIsNone(cc.get('bad'))
+        self.assertTrue(cc.get('included'))
+
+
 class TestUDProcess(helpers.ResourceUsingTestCase):
 
     def test_bytes_in_userdata(self):
@@ -547,8 +606,10 @@ class TestUDProcess(helpers.ResourceUsingTestCase):
 
 
 class TestConvertString(helpers.TestCase):
+
     def test_handles_binary_non_utf8_decodable(self):
-        blob = b'\x32\x99'
+        """Printable unicode (not utf8-decodable) is safely converted."""
+        blob = b'#!/bin/bash\necho \xc3\x84\n'
         msg = ud.convert_string(blob)
         self.assertEqual(blob, msg.get_payload(decode=True))
 
@@ -562,14 +623,21 @@ class TestConvertString(helpers.TestCase):
         msg = ud.convert_string(text)
         self.assertEqual(text, msg.get_payload(decode=False))
 
+    def test_handle_mime_parts(self):
+        """Mime parts are properly returned as a mime message."""
+        message = MIMEBase("text", "plain")
+        message.set_payload("Just text")
+        msg = ud.convert_string(str(message))
+        self.assertEqual("Just text", msg.get_payload(decode=False))
+
 
 class TestFetchBaseConfig(helpers.TestCase):
-
-    def test_only_builtin_gets_builtin2(self):
+    def test_only_builtin_gets_builtin(self):
         ret = helpers.wrap_and_call(
-            'cloudinit.stages.util',
-            {'read_conf_with_confd': None,
-             'read_conf_from_cmdline': None},
+            'cloudinit.stages',
+            {'util.read_conf_with_confd': None,
+             'util.read_conf_from_cmdline': None,
+             'read_runtime_config': {'return_value': {}}},
             stages.fetch_base_config)
         self.assertEqual(util.get_builtin_cfg(), ret)
 
@@ -578,9 +646,11 @@ class TestFetchBaseConfig(helpers.TestCase):
         test_key = sorted(builtin)[0]
         test_value = 'test'
         ret = helpers.wrap_and_call(
-            'cloudinit.stages.util',
-            {'read_conf_with_confd': {'return_value': {test_key: test_value}},
-             'read_conf_from_cmdline': None},
+            'cloudinit.stages',
+            {'util.read_conf_with_confd':
+                {'return_value': {test_key: test_value}},
+             'util.read_conf_from_cmdline': None,
+             'read_runtime_config': {'return_value': {}}},
             stages.fetch_base_config)
         self.assertEqual(ret.get(test_key), test_value)
         builtin[test_key] = test_value
@@ -592,25 +662,44 @@ class TestFetchBaseConfig(helpers.TestCase):
         test_value = 'test'
         cmdline = {test_key: test_value}
         ret = helpers.wrap_and_call(
-            'cloudinit.stages.util',
-            {'read_conf_from_cmdline': {'return_value': cmdline},
-             'read_conf_with_confd': None},
+            'cloudinit.stages',
+            {'util.read_conf_from_cmdline': {'return_value': cmdline},
+             'util.read_conf_with_confd': None,
+             'read_runtime_config': None},
             stages.fetch_base_config)
         self.assertEqual(ret.get(test_key), test_value)
         builtin[test_key] = test_value
         self.assertEqual(ret, builtin)
 
-    def test_cmdline_overrides_conf_d_and_defaults(self):
+    def test_cmdline_overrides_confd_runtime_and_defaults(self):
         builtin = {'key1': 'value0', 'key3': 'other2'}
         conf_d = {'key1': 'value1', 'key2': 'other1'}
         cmdline = {'key3': 'other3', 'key2': 'other2'}
+        runtime = {'key3': 'runtime3'}
         ret = helpers.wrap_and_call(
-            'cloudinit.stages.util',
-            {'read_conf_with_confd': {'return_value': conf_d},
-             'get_builtin_cfg': {'return_value': builtin},
-             'read_conf_from_cmdline': {'return_value': cmdline}},
+            'cloudinit.stages',
+            {'util.read_conf_with_confd': {'return_value': conf_d},
+             'util.get_builtin_cfg': {'return_value': builtin},
+             'read_runtime_config': {'return_value': runtime},
+             'util.read_conf_from_cmdline': {'return_value': cmdline}},
             stages.fetch_base_config)
         self.assertEqual(ret, {'key1': 'value1', 'key2': 'other2',
                                'key3': 'other3'})
+
+    def test_order_precedence_is_builtin_system_runtime_cmdline(self):
+        builtin = {'key1': 'builtin0', 'key3': 'builtin3'}
+        conf_d = {'key1': 'confd1', 'key2': 'confd2', 'keyconfd1': 'kconfd1'}
+        runtime = {'key1': 'runtime1', 'key2': 'runtime2'}
+        cmdline = {'key1': 'cmdline1'}
+        ret = helpers.wrap_and_call(
+            'cloudinit.stages',
+            {'util.read_conf_with_confd': {'return_value': conf_d},
+             'util.get_builtin_cfg': {'return_value': builtin},
+             'util.read_conf_from_cmdline': {'return_value': cmdline},
+             'read_runtime_config': {'return_value': runtime},
+             },
+            stages.fetch_base_config)
+        self.assertEqual(ret, {'key1': 'cmdline1', 'key2': 'runtime2',
+                               'key3': 'builtin3', 'keyconfd1': 'kconfd1'})
 
 # vi: ts=4 expandtab

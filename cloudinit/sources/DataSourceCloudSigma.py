@@ -23,6 +23,9 @@ class DataSourceCloudSigma(sources.DataSource):
     For more information about CloudSigma's Server Context:
     http://cloudsigma-docs.readthedocs.org/en/latest/server_context.html
     """
+
+    dsname = 'CloudSigma'
+
     def __init__(self, sys_cfg, distro, paths):
         self.cepko = Cepko()
         self.ssh_public_key = ''
@@ -43,10 +46,10 @@ class DataSourceCloudSigma(sources.DataSource):
             LOG.debug("detected hypervisor as %s", sys_product_name)
             return 'cloudsigma' in sys_product_name.lower()
 
-        LOG.warn("failed to query dmi data for system product name")
+        LOG.warning("failed to query dmi data for system product name")
         return False
 
-    def get_data(self):
+    def _get_data(self):
         """
         Metadata is the whole server context and /meta/cloud-config is used
         as userdata.
@@ -81,7 +84,7 @@ class DataSourceCloudSigma(sources.DataSource):
 
         return True
 
-    def get_hostname(self, fqdn=False, resolve_ip=False):
+    def get_hostname(self, fqdn=False, resolve_ip=False, metadata_only=False):
         """
         Cleans up and uses the server's name if the latter is set. Otherwise
         the first part from uuid is being used.

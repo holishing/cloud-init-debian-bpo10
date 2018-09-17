@@ -17,19 +17,24 @@ Then:
   ec2metadata --instance-id
 """
 
+import argparse
 import functools
-import httplib
 import json
 import logging
 import os
 import random
+import socket
 import string
 import sys
 import yaml
 
-from optparse import OptionParser
+try:
+    from BaseHTTPServer import HTTPServer, BaseHTTPRequestHandler
+    import httplib as hclient
+except ImportError:
+    from http.server import HTTPServer, BaseHTTPRequestHandler
+    from http import client as hclient
 
-from BaseHTTPServer import (HTTPServer, BaseHTTPRequestHandler)
 
 log = logging.getLogger('meta-server')
 
@@ -183,6 +188,10 @@ def get_ssh_keys():
     return keys
 
 
+class HTTPServerV6(HTTPServer):
+    address_family = socket.AF_INET6
+
+
 class MetaDataHandler(object):
 
     def __init__(self, opts):
@@ -249,8 +258,11 @@ class MetaDataHandler(object):
                 try:
                     key_id = int(mybe_key)
                     key_name = key_ids[key_id]
-                except:
-                    raise WebException(httplib.BAD_REQUEST,
+                except ValueError:
+                    raise WebException(hclient.BAD_REQUEST,
+                                       "%s: not an integer" % mybe_key)
+                except IndexError:
+                    raise WebException(hclient.NOT_FOUND,
                                        "Unknown key id %r" % mybe_key)
                 # Extract the possible sub-params
                 result = traverse(nparams[1:], {
@@ -280,9 +292,9 @@ class MetaDataHandler(object):
                 else:
                     return "%s" % (PLACEMENT_CAPABILITIES.get(pentry, ''))
         else:
-            log.warn(("Did not implement action %s, "
-                      "returning empty response: %r"),
-                     action, NOT_IMPL_RESPONSE)
+            log.warning(("Did not implement action %s, "
+                         "returning empty response: %r"),
+                        action, NOT_IMPL_RESPONSE)
             return NOT_IMPL_RESPONSE
 
 
@@ -342,13 +354,13 @@ class Ec2Handler(BaseHTTPRequestHandler):
             return self._get_versions
         date = segments[0].strip().lower()
         if date not in self._get_versions():
-            raise WebException(httplib.BAD_REQUEST,
+            raise WebException(hclient.BAD_REQUEST,
                                "Unknown version format %r" % date)
         if len(segments) < 2:
-            raise WebException(httplib.BAD_REQUEST, "No action provided")
+            raise WebException(hclient.BAD_REQUEST, "No action provided")
         look_name = segments[1].lower()
         if look_name not in func_mapping:
-            raise WebException(httplib.BAD_REQUEST,
+            raise WebException(hclient.BAD_REQUEST,
                                "Unknown requested data %r" % look_name)
         base_func = func_mapping[look_name]
         who = self.address_string()
@@ -371,16 +383,16 @@ class Ec2Handler(BaseHTTPRequestHandler):
             data = func()
             if not data:
                 data = ''
-            self.send_response(httplib.OK)
+            self.send_response(hclient.OK)
             self.send_header("Content-Type", "binary/octet-stream")
             self.send_header("Content-Length", len(data))
             log.info("Sending data (len=%s):\n%s", len(data),
                      format_text(data))
             self.end_headers()
-            self.wfile.write(data)
+            self.wfile.write(data.encode())
         except RuntimeError as e:
             log.exception("Error somewhere in the server.")
-            self.send_error(httplib.INTERNAL_SERVER_ERROR, message=str(e))
+            self.send_error(hclient.INTERNAL_SERVER_ERROR, message=str(e))
         except WebException as e:
             code = e.code
             log.exception(str(e))
@@ -402,29 +414,27 @@ def setup_logging(log_level, fmt='%(levelname)s: @%(name)s : %(message)s'):
 
 
 def extract_opts():
-    parser = OptionParser()
-    parser.add_option("-p", "--port", dest="port", action="store", type=int,
-                      default=80, metavar="PORT",
-                      help=("port from which to serve traffic"
-                            " (default: %default)"))
-    parser.add_option("-a", "--addr", dest="address", action="store", type=str,
-                      default='0.0.0.0', metavar="ADDRESS",
-                      help=("address from which to serve traffic"
-                            " (default: %default)"))
-    parser.add_option("-f", '--user-data-file', dest='user_data_file',
-                      action='store', metavar='FILE',
-                      help=("user data filename to serve back to"
-                            "incoming requests"))
-    (options, args) = parser.parse_args()
-    out = dict()
-    out['extra'] = args
-    out['port'] = options.port
-    out['user_data_file'] = None
-    out['address'] = options.address
-    if options.user_data_file:
-        if not os.path.isfile(options.user_data_file):
+    parser = argparse.ArgumentParser()
+    parser.add_argument("-p", "--port", dest="port", action="store", type=int,
+                        default=80, metavar="PORT",
+                        help=("port from which to serve traffic"
+                              " (default: %default)"))
+    parser.add_argument("-a", "--addr", dest="address", action="store",
+                        type=str, default='::', metavar="ADDRESS",
+                        help=("address from which to serve traffic"
+                              " (default: %default)"))
+    parser.add_argument("-f", '--user-data-file', dest='user_data_file',
+                        action='store', metavar='FILE',
+                        help=("user data filename to serve back to"
+                              "incoming requests"))
+    parser.add_argument('extra', nargs='*')
+    args = parser.parse_args()
+    out = {'port': args.port, 'address': args.address, 'extra': args.extra,
+           'user_data_file': None}
+    if args.user_data_file:
+        if not os.path.isfile(args.user_data_file):
             parser.error("Option -f specified a non-existent file")
-        with open(options.user_data_file, 'rb') as fh:
+        with open(args.user_data_file, 'rb') as fh:
             out['user_data_file'] = fh.read()
     return out
 
@@ -444,7 +454,7 @@ def run_server():
     setup_fetchers(opts)
     log.info("CLI opts: %s", opts)
     server_address = (opts['address'], opts['port'])
-    server = HTTPServer(server_address, Ec2Handler)
+    server = HTTPServerV6(server_address, Ec2Handler)
     sa = server.socket.getsockname()
     log.info("Serving ec2 metadata on %s using port %s ...", sa[0], sa[1])
     server.serve_forever()

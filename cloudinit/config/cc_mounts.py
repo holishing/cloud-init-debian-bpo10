@@ -76,6 +76,7 @@ DEVICE_NAME_FILTER = r"^([x]{0,1}[shv]d[a-z][0-9]*|sr[0-9]+)$"
 DEVICE_NAME_RE = re.compile(DEVICE_NAME_FILTER)
 WS = re.compile("[%s]+" % (whitespace))
 FSTAB_PATH = "/etc/fstab"
+MNT_COMMENT = "comment=cloudconfig"
 
 LOG = logging.getLogger(__name__)
 
@@ -216,8 +217,9 @@ def suggested_swapsize(memsize=None, maxsize=None, fsys=None):
         else:
             pinfo[k] = v
 
-    LOG.debug("suggest %(size)s swap for %(mem)s memory with '%(avail)s'"
-              " disk given max=%(max_in)s [max=%(max)s]'" % pinfo)
+    LOG.debug("suggest %s swap for %s memory with '%s'"
+              " disk given max=%s [max=%s]'", pinfo['size'], pinfo['mem'],
+              pinfo['avail'], pinfo['max_in'], pinfo['max'])
     return size
 
 
@@ -231,8 +233,8 @@ def setup_swapfile(fname, size=None, maxsize=None):
     if str(size).lower() == "auto":
         try:
             memsize = util.read_meminfo()['total']
-        except IOError as e:
-            LOG.debug("Not creating swap. failed to read meminfo")
+        except IOError:
+            LOG.debug("Not creating swap: failed to read meminfo")
             return
 
         util.ensure_dir(tdir)
@@ -266,7 +268,7 @@ def handle_swapcfg(swapcfg):
        return None or (filename, size)
     """
     if not isinstance(swapcfg, dict):
-        LOG.warn("input for swap config was not a dict.")
+        LOG.warning("input for swap config was not a dict.")
         return None
 
     fname = swapcfg.get('filename', '/swap.img')
@@ -279,17 +281,18 @@ def handle_swapcfg(swapcfg):
 
     if os.path.exists(fname):
         if not os.path.exists("/proc/swaps"):
-            LOG.debug("swap file %s existed. no /proc/swaps. Being safe.",
-                      fname)
+            LOG.debug("swap file %s exists, but no /proc/swaps exists, "
+                      "being safe", fname)
             return fname
         try:
             for line in util.load_file("/proc/swaps").splitlines():
                 if line.startswith(fname + " "):
-                    LOG.debug("swap file %s already in use.", fname)
+                    LOG.debug("swap file %s already in use", fname)
                     return fname
-            LOG.debug("swap file %s existed, but not in /proc/swaps", fname)
+            LOG.debug("swap file %s exists, but not in /proc/swaps", fname)
         except Exception:
-            LOG.warn("swap file %s existed. Error reading /proc/swaps", fname)
+            LOG.warning("swap file %s exists. Error reading /proc/swaps",
+                        fname)
             return fname
 
     try:
@@ -300,7 +303,7 @@ def handle_swapcfg(swapcfg):
         return setup_swapfile(fname=fname, size=size, maxsize=maxsize)
 
     except Exception as e:
-        LOG.warn("failed to setup swap: %s", e)
+        LOG.warning("failed to setup swap: %s", e)
 
     return None
 
@@ -325,6 +328,22 @@ def handle(_name, cfg, cloud, log, _args):
 
     LOG.debug("mounts configuration is %s", cfgmnt)
 
+    fstab_lines = []
+    fstab_devs = {}
+    fstab_removed = []
+
+    for line in util.load_file(FSTAB_PATH).splitlines():
+        if MNT_COMMENT in line:
+            fstab_removed.append(line)
+            continue
+
+        try:
+            toks = WS.split(line)
+        except Exception:
+            pass
+        fstab_devs[toks[0]] = line
+        fstab_lines.append(line)
+
     for i in range(len(cfgmnt)):
         # skip something that wasn't a list
         if not isinstance(cfgmnt[i], list):
@@ -334,12 +353,17 @@ def handle(_name, cfg, cloud, log, _args):
 
         start = str(cfgmnt[i][0])
         sanitized = sanitize_devname(start, cloud.device_name_to_device, log)
-        if sanitized is None:
-            log.debug("Ignorming nonexistant named mount %s", start)
-            continue
-
         if sanitized != start:
             log.debug("changed %s => %s" % (start, sanitized))
+
+        if sanitized is None:
+            log.debug("Ignoring nonexistent named mount %s", start)
+            continue
+        elif sanitized in fstab_devs:
+            log.info("Device %s already defined in fstab: %s",
+                     sanitized, fstab_devs[sanitized])
+            continue
+
         cfgmnt[i][0] = sanitized
 
         # in case the user did not quote a field (likely fs-freq, fs_passno)
@@ -371,11 +395,17 @@ def handle(_name, cfg, cloud, log, _args):
     for defmnt in defmnts:
         start = defmnt[0]
         sanitized = sanitize_devname(start, cloud.device_name_to_device, log)
-        if sanitized is None:
-            log.debug("Ignoring nonexistant default named mount %s", start)
-            continue
         if sanitized != start:
             log.debug("changed default device %s => %s" % (start, sanitized))
+
+        if sanitized is None:
+            log.debug("Ignoring nonexistent default named mount %s", start)
+            continue
+        elif sanitized in fstab_devs:
+            log.debug("Device %s already defined in fstab: %s",
+                      sanitized, fstab_devs[sanitized])
+            continue
+
         defmnt[0] = sanitized
 
         cfgmnt_has = False
@@ -395,7 +425,7 @@ def handle(_name, cfg, cloud, log, _args):
     actlist = []
     for x in cfgmnt:
         if x[1] is None:
-            log.debug("Skipping non-existent device named %s", x[0])
+            log.debug("Skipping nonexistent device named %s", x[0])
         else:
             actlist.append(x)
 
@@ -404,33 +434,20 @@ def handle(_name, cfg, cloud, log, _args):
         actlist.append([swapret, "none", "swap", "sw", "0", "0"])
 
     if len(actlist) == 0:
-        log.debug("No modifications to fstab needed.")
+        log.debug("No modifications to fstab needed")
         return
 
-    comment = "comment=cloudconfig"
     cc_lines = []
     needswap = False
     dirs = []
     for line in actlist:
         # write 'comment' in the fs_mntops, entry,  claiming this
-        line[3] = "%s,%s" % (line[3], comment)
+        line[3] = "%s,%s" % (line[3], MNT_COMMENT)
         if line[2] == "swap":
             needswap = True
         if line[1].startswith("/"):
             dirs.append(line[1])
         cc_lines.append('\t'.join(line))
-
-    fstab_lines = []
-    removed = []
-    for line in util.load_file(FSTAB_PATH).splitlines():
-        try:
-            toks = WS.split(line)
-            if toks[3].find(comment) != -1:
-                removed.append(line)
-                continue
-        except Exception:
-            pass
-        fstab_lines.append(line)
 
     for d in dirs:
         try:
@@ -439,7 +456,7 @@ def handle(_name, cfg, cloud, log, _args):
             util.logexc(log, "Failed to make '%s' config-mount", d)
 
     sadds = [WS.sub(" ", n) for n in cc_lines]
-    sdrops = [WS.sub(" ", n) for n in removed]
+    sdrops = [WS.sub(" ", n) for n in fstab_removed]
 
     sops = (["- " + drop for drop in sdrops if drop not in sadds] +
             ["+ " + add for add in sadds if add not in sdrops])

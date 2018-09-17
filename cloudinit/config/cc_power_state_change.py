@@ -71,10 +71,10 @@ def givecmdline(pid):
         # Example output from procstat -c 1
         #   PID COMM             ARGS
         #     1 init             /bin/init --
-        if util.system_info()["platform"].startswith('FreeBSD'):
+        if util.is_FreeBSD():
             (output, _err) = util.subp(['procstat', '-c', str(pid)])
             line = output.splitlines()[1]
-            m = re.search('\d+ (\w|\.|-)+\s+(/\w.+)', line)
+            m = re.search(r'\d+ (\w|\.|-)+\s+(/\w.+)', line)
             return m.group(2)
         else:
             return util.load_file("/proc/%s/cmdline" % pid)
@@ -194,6 +194,7 @@ def doexit(sysexit):
 
 
 def execmd(exe_args, output=None, data_in=None):
+    ret = 1
     try:
         proc = subprocess.Popen(exe_args, stdin=subprocess.PIPE,
                                 stdout=output, stderr=subprocess.STDOUT)

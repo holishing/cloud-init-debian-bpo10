@@ -19,6 +19,7 @@ import time
 
 from cloudinit import ec2_utils as ec2
 from cloudinit import log as logging
+from cloudinit.net import dhcp
 from cloudinit import sources
 from cloudinit import url_helper as uhelp
 from cloudinit import util
@@ -64,6 +65,13 @@ class CloudStackPasswordServerClient(object):
 
 
 class DataSourceCloudStack(sources.DataSource):
+
+    dsname = 'CloudStack'
+
+    # Setup read_url parameters per get_url_params.
+    url_max_wait = 120
+    url_timeout = 50
+
     def __init__(self, sys_cfg, distro, paths):
         sources.DataSource.__init__(self, sys_cfg, distro, paths)
         self.seed_dir = os.path.join(paths.seed_dir, 'cs')
@@ -76,33 +84,18 @@ class DataSourceCloudStack(sources.DataSource):
         self.metadata_address = "http://%s/" % (self.vr_addr,)
         self.cfg = {}
 
-    def _get_url_settings(self):
-        mcfg = self.ds_cfg
-        max_wait = 120
-        try:
-            max_wait = int(mcfg.get("max_wait", max_wait))
-        except Exception:
-            util.logexc(LOG, "Failed to get max wait. using %s", max_wait)
-
-        if max_wait == 0:
-            return False
-
-        timeout = 50
-        try:
-            timeout = int(mcfg.get("timeout", timeout))
-        except Exception:
-            util.logexc(LOG, "Failed to get timeout, using %s", timeout)
-
-        return (max_wait, timeout)
-
     def wait_for_metadata_service(self):
-        (max_wait, timeout) = self._get_url_settings()
+        url_params = self.get_url_params()
+
+        if url_params.max_wait_seconds <= 0:
+            return False
 
         urls = [uhelp.combine_url(self.metadata_address,
                                   'latest/meta-data/instance-id')]
         start_time = time.time()
-        url = uhelp.wait_for_url(urls=urls, max_wait=max_wait,
-                                 timeout=timeout, status_cb=LOG.warn)
+        url = uhelp.wait_for_url(
+            urls=urls, max_wait=url_params.max_wait_seconds,
+            timeout=url_params.timeout_seconds, status_cb=LOG.warn)
 
         if url:
             LOG.debug("Using metadata source: '%s'", url)
@@ -116,7 +109,7 @@ class DataSourceCloudStack(sources.DataSource):
     def get_config_obj(self):
         return self.cfg
 
-    def get_data(self):
+    def _get_data(self):
         seed_ret = {}
         if util.read_optional_seed(seed_ret, base=(self.seed_dir + "/")):
             self.userdata_raw = seed_ret['user-data']
@@ -178,51 +171,74 @@ def get_default_gateway():
 
 def get_dhclient_d():
     # find lease files directory
-    supported_dirs = ["/var/lib/dhclient", "/var/lib/dhcp"]
+    supported_dirs = ["/var/lib/dhclient", "/var/lib/dhcp",
+                      "/var/lib/NetworkManager"]
     for d in supported_dirs:
-        if os.path.exists(d):
+        if os.path.exists(d) and len(os.listdir(d)) > 0:
             LOG.debug("Using %s lease directory", d)
             return d
     return None
 
 
-def get_latest_lease():
+def get_latest_lease(lease_d=None):
     # find latest lease file
-    lease_d = get_dhclient_d()
+    if lease_d is None:
+        lease_d = get_dhclient_d()
     if not lease_d:
         return None
     lease_files = os.listdir(lease_d)
     latest_mtime = -1
     latest_file = None
-    for file_name in lease_files:
-        if file_name.startswith("dhclient.") and \
-           (file_name.endswith(".lease") or file_name.endswith(".leases")):
-            abs_path = os.path.join(lease_d, file_name)
-            mtime = os.path.getmtime(abs_path)
-            if mtime > latest_mtime:
-                latest_mtime = mtime
-                latest_file = abs_path
+
+    # lease files are named inconsistently across distros.
+    # We assume that 'dhclient6' indicates ipv6 and ignore it.
+    # ubuntu:
+    #   dhclient.<iface>.leases, dhclient.leases, dhclient6.leases
+    # centos6:
+    #   dhclient-<iface>.leases, dhclient6.leases
+    # centos7: ('--' is not a typo)
+    #   dhclient--<iface>.lease, dhclient6.leases
+    for fname in lease_files:
+        if fname.startswith("dhclient6"):
+            # avoid files that start with dhclient6 assuming dhcpv6.
+            continue
+        if not (fname.endswith(".lease") or fname.endswith(".leases")):
+            continue
+
+        abs_path = os.path.join(lease_d, fname)
+        mtime = os.path.getmtime(abs_path)
+        if mtime > latest_mtime:
+            latest_mtime = mtime
+            latest_file = abs_path
     return latest_file
 
 
 def get_vr_address():
     # Get the address of the virtual router via dhcp leases
-    # see http://bit.ly/T76eKC for documentation on the virtual router.
     # If no virtual router is detected, fallback on default gateway.
+    # See http://docs.cloudstack.apache.org/projects/cloudstack-administration/en/4.8/virtual_machines/user-data.html # noqa
+
+    # Try networkd first...
+    latest_address = dhcp.networkd_get_option_from_leases('SERVER_ADDRESS')
+    if latest_address:
+        LOG.debug("Found SERVER_ADDRESS '%s' via networkd_leases",
+                  latest_address)
+        return latest_address
+
+    # Try dhcp lease files next...
     lease_file = get_latest_lease()
     if not lease_file:
         LOG.debug("No lease file found, using default gateway")
         return get_default_gateway()
 
-    latest_address = None
     with open(lease_file, "r") as fd:
         for line in fd:
             if "dhcp-server-identifier" in line:
                 words = line.strip(" ;\r\n").split(" ")
                 if len(words) > 2:
-                    dhcp = words[2]
-                    LOG.debug("Found DHCP identifier %s", dhcp)
-                    latest_address = dhcp
+                    dhcptok = words[2]
+                    LOG.debug("Found DHCP identifier %s", dhcptok)
+                    latest_address = dhcptok
     if not latest_address:
         # No virtual router found, fallback on default gateway
         LOG.debug("No DHCP found, using default gateway")

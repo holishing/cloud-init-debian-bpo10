@@ -1,6 +1,6 @@
 # This file is part of cloud-init. See LICENSE file for license information.
 
-from . import helpers
+from cloudinit.tests import helpers
 
 from cloudinit.handlers import cloud_config
 from cloudinit.handlers import (CONTENT_START, CONTENT_END)
@@ -100,7 +100,7 @@ def make_dict(max_depth, seed=None):
 
 class TestSimpleRun(helpers.ResourceUsingTestCase):
     def _load_merge_files(self):
-        merge_root = self.resourceLocation('merge_sources')
+        merge_root = helpers.resourceLocation('merge_sources')
         tests = []
         source_ids = collections.defaultdict(list)
         expected_files = {}

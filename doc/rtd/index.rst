@@ -38,7 +38,9 @@ initialization of a cloud instance.
    topics/logging.rst
    topics/modules.rst
    topics/merging.rst
+   topics/network-config.rst
    topics/vendordata.rst
+   topics/debugging.rst
    topics/moreinfo.rst
    topics/hacking.rst
    topics/tests.rst

@@ -20,7 +20,7 @@ from cloudinit.config import cc_apt_configure
 from cloudinit import gpg
 from cloudinit import util
 
-from ..helpers import TestCase
+from cloudinit.tests.helpers import TestCase
 
 EXPECTEDKEY = """-----BEGIN PGP PUBLIC KEY BLOCK-----
 Version: GnuPG v1
@@ -37,13 +37,6 @@ S0ORP6HXET3+jC8BMG4tBWCTK/XEZw==
 -----END PGP PUBLIC KEY BLOCK-----"""
 
 ADD_APT_REPO_MATCH = r"^[\w-]+:\w"
-
-
-def load_tfile_or_url(*args, **kwargs):
-    """load_tfile_or_url
-    load file and return content after decoding
-    """
-    return util.decode_binary(util.read_file_or_url(*args, **kwargs).contents)
 
 
 class FakeDistro(object):
@@ -125,7 +118,7 @@ class TestAptSourceConfig(TestCase):
 
         self.assertTrue(os.path.isfile(filename))
 
-        contents = load_tfile_or_url(filename)
+        contents = util.load_file(filename)
         self.assertTrue(re.search(r"%s %s %s %s\n" %
                                   ("deb", "http://archive.ubuntu.com/ubuntu",
                                    "karmic-backports",
@@ -157,13 +150,13 @@ class TestAptSourceConfig(TestCase):
         self.apt_src_basic(self.aptlistfile, cfg)
 
         # extra verify on two extra files of this test
-        contents = load_tfile_or_url(self.aptlistfile2)
+        contents = util.load_file(self.aptlistfile2)
         self.assertTrue(re.search(r"%s %s %s %s\n" %
                                   ("deb", "http://archive.ubuntu.com/ubuntu",
                                    "precise-backports",
                                    "main universe multiverse restricted"),
                                   contents, flags=re.IGNORECASE))
-        contents = load_tfile_or_url(self.aptlistfile3)
+        contents = util.load_file(self.aptlistfile3)
         self.assertTrue(re.search(r"%s %s %s %s\n" %
                                   ("deb", "http://archive.ubuntu.com/ubuntu",
                                    "lucid-backports",
@@ -220,7 +213,7 @@ class TestAptSourceConfig(TestCase):
 
         self.assertTrue(os.path.isfile(filename))
 
-        contents = load_tfile_or_url(filename)
+        contents = util.load_file(filename)
         self.assertTrue(re.search(r"%s %s %s %s\n" %
                                   ("deb", params['MIRROR'], params['RELEASE'],
                                    "multiverse"),
@@ -241,12 +234,12 @@ class TestAptSourceConfig(TestCase):
 
         # extra verify on two extra files of this test
         params = self._get_default_params()
-        contents = load_tfile_or_url(self.aptlistfile2)
+        contents = util.load_file(self.aptlistfile2)
         self.assertTrue(re.search(r"%s %s %s %s\n" %
                                   ("deb", params['MIRROR'], params['RELEASE'],
                                    "main"),
                                   contents, flags=re.IGNORECASE))
-        contents = load_tfile_or_url(self.aptlistfile3)
+        contents = util.load_file(self.aptlistfile3)
         self.assertTrue(re.search(r"%s %s %s %s\n" %
                                   ("deb", params['MIRROR'], params['RELEASE'],
                                    "universe"),
@@ -296,7 +289,7 @@ class TestAptSourceConfig(TestCase):
 
         self.assertTrue(os.path.isfile(filename))
 
-        contents = load_tfile_or_url(filename)
+        contents = util.load_file(filename)
         self.assertTrue(re.search(r"%s %s %s %s\n" %
                                   ("deb",
                                    ('http://ppa.launchpad.net/smoser/'
@@ -336,14 +329,14 @@ class TestAptSourceConfig(TestCase):
                 'filename': self.aptlistfile3}
 
         self.apt_src_keyid(self.aptlistfile, [cfg1, cfg2, cfg3], 3)
-        contents = load_tfile_or_url(self.aptlistfile2)
+        contents = util.load_file(self.aptlistfile2)
         self.assertTrue(re.search(r"%s %s %s %s\n" %
                                   ("deb",
                                    ('http://ppa.launchpad.net/smoser/'
                                     'cloud-init-test/ubuntu'),
                                    "xenial", "universe"),
                                   contents, flags=re.IGNORECASE))
-        contents = load_tfile_or_url(self.aptlistfile3)
+        contents = util.load_file(self.aptlistfile3)
         self.assertTrue(re.search(r"%s %s %s %s\n" %
                                   ("deb",
                                    ('http://ppa.launchpad.net/smoser/'
@@ -375,7 +368,7 @@ class TestAptSourceConfig(TestCase):
 
         self.assertTrue(os.path.isfile(filename))
 
-        contents = load_tfile_or_url(filename)
+        contents = util.load_file(filename)
         self.assertTrue(re.search(r"%s %s %s %s\n" %
                                   ("deb",
                                    ('http://ppa.launchpad.net/smoser/'
@@ -569,7 +562,8 @@ class TestAptSourceConfig(TestCase):
         newcfg = cc_apt_configure.convert_to_v3_apt_format(cfg_3_only)
         self.assertEqual(newcfg, cfg_3_only)
         # collision (unequal)
-        with self.assertRaises(ValueError):
+        match = "Old and New.*unequal.*apt_proxy"
+        with self.assertRaisesRegex(ValueError, match):
             cc_apt_configure.convert_to_v3_apt_format(cfgconflict)
 
     def test_convert_to_new_format_dict_collision(self):

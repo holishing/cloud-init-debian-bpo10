@@ -24,7 +24,7 @@ from cloudinit.sources import DataSourceNone
 
 from cloudinit.distros.debian import Distro
 
-from .. import helpers as t_help
+from cloudinit.tests import helpers as t_help
 
 LOG = logging.getLogger(__name__)
 
@@ -62,13 +62,6 @@ deb http://archive.ubuntu.com/ubuntu/ fakerelease main restricted
 deb-src http://archive.ubuntu.com/ubuntu/ fakerelease main restricted
 # FIND_SOMETHING_SPECIAL
 """)
-
-
-def load_tfile_or_url(*args, **kwargs):
-    """load_tfile_or_url
-    load file and return content after decoding
-    """
-    return util.decode_binary(util.read_file_or_url(*args, **kwargs).contents)
 
 
 class TestAptSourceConfigSourceList(t_help.FilesystemMockingTestCase):

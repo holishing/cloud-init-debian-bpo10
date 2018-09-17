@@ -65,12 +65,12 @@ take a list of configs, allowing mirrors to be specified on a per-architecture
 basis. Each config is a dictionary which must have an entry for ``arches``,
 specifying which architectures that config entry is for. The keyword
 ``default`` applies to any architecture not explicitly listed. The mirror url
-can be specified with the ``url`` key, or a list of mirrors to check can be
+can be specified with the ``uri`` key, or a list of mirrors to check can be
 provided in order, with the first mirror that can be resolved being selected.
 This allows the same configuration to be used in different environment, with
-different hosts used for a local apt mirror. If no mirror is provided by uri or
-search, ``search_dns`` may be used to search for dns names in the format
-``<distro>-mirror`` in each of the following:
+different hosts used for a local apt mirror. If no mirror is provided by
+``uri`` or ``search``, ``search_dns`` may be used to search for dns names in
+the format ``<distro>-mirror`` in each of the following:
 
     - fqdn of this host per cloud metadata
     - localdomain
@@ -121,7 +121,7 @@ and https protocols respectively. The ``proxy`` key also exists as an alias for
 All source entries in ``apt-sources`` that match regex in
 ``add_apt_repo_match`` will be added to the system using
 ``add-apt-repository``. If ``add_apt_repo_match`` is not specified, it defaults
-to ``^[\w-]+:\w``
+to ``^[\\w-]+:\\w``
 
 **Add source list entries:**
 
@@ -275,17 +275,37 @@ def handle(name, ocfg, cloud, log, _):
     cfg = ocfg.get('apt', {})
 
     if not isinstance(cfg, dict):
-        raise ValueError("Expected dictionary for 'apt' config, found %s",
-                         type(cfg))
+        raise ValueError(
+            "Expected dictionary for 'apt' config, found {config_type}".format(
+                config_type=type(cfg)))
 
-    LOG.debug("handling apt (module %s) with apt config '%s'", name, cfg)
+    apply_debconf_selections(cfg, target)
+    apply_apt(cfg, cloud, target)
+
+
+def _should_configure_on_empty_apt():
+    # if no config was provided, should apt configuration be done?
+    if util.system_is_snappy():
+        return False, "system is snappy."
+    if not (util.which('apt-get') or util.which('apt')):
+        return False, "no apt commands."
+    return True, "Apt is available."
+
+
+def apply_apt(cfg, cloud, target):
+    # cfg is the 'apt' top level dictionary already in 'v3' format.
+    if not cfg:
+        should_config, msg = _should_configure_on_empty_apt()
+        if not should_config:
+            LOG.debug("Nothing to do: No apt config and %s", msg)
+            return
+
+    LOG.debug("handling apt config: %s", cfg)
 
     release = util.lsb_release(target=target)['codename']
     arch = util.get_architecture(target)
     mirrors = find_apt_mirror_info(cfg, cloud, arch=arch)
     LOG.debug("Apt Mirror info: %s", mirrors)
-
-    apply_debconf_selections(cfg, target)
 
     if util.is_false(cfg.get('preserve_sources_list', False)):
         generate_sources_list(cfg, release, mirrors, cloud)
@@ -333,8 +353,8 @@ def dpkg_reconfigure(packages, target=None):
             unhandled.append(pkg)
 
     if len(unhandled):
-        LOG.warn("The following packages were installed and preseeded, "
-                 "but cannot be unconfigured: %s", unhandled)
+        LOG.warning("The following packages were installed and preseeded, "
+                    "but cannot be unconfigured: %s", unhandled)
 
     if len(to_config):
         util.subp(['dpkg-reconfigure', '--frontend=noninteractive'] +
@@ -358,7 +378,7 @@ def apply_debconf_selections(cfg, target=None):
 
     # get a complete list of packages listed in input
     pkgs_cfgd = set()
-    for key, content in selsets.items():
+    for _key, content in selsets.items():
         for line in content.splitlines():
             if line.startswith("#"):
                 continue
@@ -427,7 +447,7 @@ def rename_apt_lists(new_mirrors, target=None):
                 os.rename(filename, newname)
             except OSError:
                 # since this is a best effort task, warn with but don't fail
-                LOG.warn("Failed to rename apt list:", exc_info=True)
+                LOG.warning("Failed to rename apt list:", exc_info=True)
 
 
 def mirror_to_placeholder(tmpl, mirror, placeholder):
@@ -435,7 +455,7 @@ def mirror_to_placeholder(tmpl, mirror, placeholder):
        replace the specified mirror in a template with a placeholder string
        Checks for existance of the expected mirror and warns if not found"""
     if mirror not in tmpl:
-        LOG.warn("Expected mirror '%s' not found in: %s", mirror, tmpl)
+        LOG.warning("Expected mirror '%s' not found in: %s", mirror, tmpl)
     return tmpl.replace(mirror, placeholder)
 
 
@@ -511,7 +531,8 @@ def generate_sources_list(cfg, release, mirrors, cloud):
         if not template_fn:
             template_fn = cloud.get_template_filename('sources.list')
         if not template_fn:
-            LOG.warn("No template found, not rendering /etc/apt/sources.list")
+            LOG.warning("No template found, "
+                        "not rendering /etc/apt/sources.list")
             return
         tmpl = util.load_file(template_fn)
 

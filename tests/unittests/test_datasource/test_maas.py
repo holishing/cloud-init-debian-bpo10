@@ -1,6 +1,7 @@
 # This file is part of cloud-init. See LICENSE file for license information.
 
 from copy import copy
+import mock
 import os
 import shutil
 import tempfile
@@ -8,15 +9,10 @@ import yaml
 
 from cloudinit.sources import DataSourceMAAS
 from cloudinit import url_helper
-from ..helpers import TestCase, populate_dir
-
-try:
-    from unittest import mock
-except ImportError:
-    import mock
+from cloudinit.tests.helpers import CiTestCase, populate_dir
 
 
-class TestMAASDataSource(TestCase):
+class TestMAASDataSource(CiTestCase):
 
     def setUp(self):
         super(TestMAASDataSource, self).setUp()
@@ -44,7 +40,7 @@ class TestMAASDataSource(TestCase):
 
         # verify that 'userdata' is not returned as part of the metadata
         self.assertFalse(('user-data' in md))
-        self.assertEqual(vd, None)
+        self.assertIsNone(vd)
 
     def test_seed_dir_valid_extra(self):
         """Verify extra files do not affect seed_dir validity."""
@@ -57,7 +53,7 @@ class TestMAASDataSource(TestCase):
         my_d = os.path.join(self.tmp, "valid_extra")
         populate_dir(my_d, data)
 
-        ud, md, vd = DataSourceMAAS.read_maas_seed_dir(my_d)
+        ud, md, _vd = DataSourceMAAS.read_maas_seed_dir(my_d)
 
         self.assertEqual(userdata, ud)
         for key in ('instance-id', 'local-hostname'):
@@ -153,10 +149,53 @@ class TestMAASDataSource(TestCase):
             'meta-data/local-hostname': 'test-hostname',
             'meta-data/vendor-data': yaml.safe_dump(expected_vd).encode(),
         }
-        ud, md, vd = self.mock_read_maas_seed_url(
+        _ud, md, vd = self.mock_read_maas_seed_url(
             valid, "http://example.com/foo")
 
         self.assertEqual(valid['meta-data/instance-id'], md['instance-id'])
         self.assertEqual(expected_vd, vd)
+
+
+@mock.patch("cloudinit.sources.DataSourceMAAS.url_helper.OauthUrlHelper")
+class TestGetOauthHelper(CiTestCase):
+    with_logs = True
+    base_cfg = {'consumer_key': 'FAKE_CONSUMER_KEY',
+                'token_key': 'FAKE_TOKEN_KEY',
+                'token_secret': 'FAKE_TOKEN_SECRET',
+                'consumer_secret': None}
+
+    def test_all_required(self, m_helper):
+        """Valid config as expected."""
+        DataSourceMAAS.get_oauth_helper(self.base_cfg.copy())
+        m_helper.assert_has_calls([mock.call(**self.base_cfg)])
+
+    def test_other_fields_not_passed_through(self, m_helper):
+        """Only relevant fields are passed through."""
+        mycfg = self.base_cfg.copy()
+        mycfg['unrelated_field'] = 'unrelated'
+        DataSourceMAAS.get_oauth_helper(mycfg)
+        m_helper.assert_has_calls([mock.call(**self.base_cfg)])
+
+
+class TestGetIdHash(CiTestCase):
+    v1_cfg = {'consumer_key': 'CKEY', 'token_key': 'TKEY',
+              'token_secret': 'TSEC'}
+    v1_id = (
+        'v1:'
+        '403ee5f19c956507f1d0e50814119c405902137ea4f8838bde167c5da8110392')
+
+    def test_v1_expected(self):
+        """Test v1 id generated as expected working behavior from config."""
+        result = DataSourceMAAS.get_id_from_ds_cfg(self.v1_cfg.copy())
+        self.assertEqual(self.v1_id, result)
+
+    def test_v1_extra_fields_are_ignored(self):
+        """Test v1 id ignores unused entries in config."""
+        cfg = self.v1_cfg.copy()
+        cfg['consumer_secret'] = "BOO"
+        cfg['unrelated'] = "HI MOM"
+        result = DataSourceMAAS.get_id_from_ds_cfg(cfg)
+        self.assertEqual(self.v1_id, result)
+
 
 # vi: ts=4 expandtab

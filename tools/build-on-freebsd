@@ -8,18 +8,16 @@ fail() { echo "FAILED:" "$@" 1>&2; exit 1; }
 # Check dependencies:
 depschecked=/tmp/c-i.dependencieschecked
 pkgs="
+   bash
    dmidecode
    e2fsprogs
-   gpart
    py27-Jinja2
-   py27-argparse
    py27-boto
    py27-cheetah
    py27-configobj
    py27-jsonpatch
    py27-jsonpointer
-   py27-oauth
-   py27-prettytable
+   py27-oauthlib
    py27-requests
    py27-serial
    py27-six
@@ -36,9 +34,6 @@ touch $depschecked
 # Build the code and install in /usr/local/:
 python setup.py build
 python setup.py install -O1 --skip-build --prefix /usr/local/ --init-system sysvinit_freebsd
-
-# Install the correct config file:
-cp config/cloud.cfg-freebsd /usr/local/etc/cloud/cloud.cfg
 
 # Enable cloud-init in /etc/rc.conf:
 sed -i.bak -e "/cloudinit_enable=.*/d" /etc/rc.conf

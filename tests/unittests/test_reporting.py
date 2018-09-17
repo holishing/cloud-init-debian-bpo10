@@ -8,7 +8,7 @@ from cloudinit.reporting import handlers
 
 import mock
 
-from .helpers import TestCase
+from cloudinit.tests.helpers import TestCase
 
 
 def _fake_registry():
@@ -126,7 +126,7 @@ class TestBaseReportingHandler(TestCase):
 
     def test_base_reporting_handler_is_abstract(self):
         regexp = r".*abstract.*publish_event.*"
-        self.assertRaisesRegexp(TypeError, regexp, handlers.ReportingHandler)
+        self.assertRaisesRegex(TypeError, regexp, handlers.ReportingHandler)
 
 
 class TestLogHandler(TestCase):
