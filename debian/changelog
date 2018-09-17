@@ -20,6 +20,8 @@ cloud-init (18.3-1) UNRELEASED; urgency=medium
   * Added Suggests: btrfs-progs, e2fsprogs, xfsprogs (Closes: #887226).
   * Removed  Miguel Landaeta and Julien Danjou from uploaders, as they haven't
     been active.
+  * Removed tools/hacking.py from debian/copyright (the file doesn't exist
+    anymore).
 
  -- Thomas Goirand <zigo@debian.org>  Mon, 17 Sep 2018 13:18:40 +0200
 
