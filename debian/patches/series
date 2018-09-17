@@ -4,3 +4,4 @@
 0007-Skip-Cloudstack-tests-that-expect-network.patch
 0009-Drop-all-unused-extended-version-handling.patch
 0012-Fix-message-when-a-local-is-missing.patch
+fix-sysvinit-dependencies.patch
