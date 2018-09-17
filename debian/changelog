@@ -1,6 +1,7 @@
 cloud-init (18.3-1) UNRELEASED; urgency=medium
 
-  * New upstream release (Closes: #907672).
+  * New upstream release (Closes: #907672):
+    - Do not timestamp sudoers files (Closes: #788103).
   * Drop patches applied upstream or now irrelevant:
     - 0001-Fix-the-path-to-blkid-in-test-suite.patch
     - 0004-debian-sources.list.patch
