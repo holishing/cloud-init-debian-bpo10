@@ -56,6 +56,10 @@ Depends:
 Recommends:
  eatmydata,
  sudo,
+Suggests:
+ btrfs-progs,
+ e2fsprogs,
+ xfsprogs,
 Description: initialization system for infrastructure cloud instances
  Cloud-init provides a framework and tool to configure and customize virtual
  machine instances for Infrastructure-as-a-Service (IaaS) clouds platforms. It
