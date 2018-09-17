@@ -214,7 +214,7 @@ def device_part_info(devpath):
 
     # FreeBSD doesn't know of sysfs so just get everything we need from
     # the device, like /dev/vtbd0p2.
-    if util.system_info()["platform"].startswith('FreeBSD'):
+    if util.is_FreeBSD():
         m = re.search('^(/dev/.+)p([0-9])$', devpath)
         return (m.group(1), m.group(2))
 
@@ -247,7 +247,20 @@ def devent2dev(devent):
         result = util.get_mount_info(devent)
         if not result:
             raise ValueError("Could not determine device of '%s' % dev_ent")
-        return result[0]
+        dev = result[0]
+
+    container = util.is_container()
+
+    # Ensure the path is a block device.
+    if (dev == "/dev/root" and not container):
+        dev = util.rootdev_from_cmdline(util.get_cmdline())
+        if dev is None:
+            if os.path.exists(dev):
+                # if /dev/root exists, but we failed to convert
+                # that to a "real" /dev/ path device, then return it.
+                return dev
+            raise ValueError("Unable to find device '/dev/root'")
+    return dev
 
 
 def resize_devices(resizer, devices):

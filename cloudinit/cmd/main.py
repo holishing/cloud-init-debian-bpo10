@@ -3,10 +3,12 @@
 # Copyright (C) 2012 Canonical Ltd.
 # Copyright (C) 2012 Hewlett-Packard Development Company, L.P.
 # Copyright (C) 2012 Yahoo! Inc.
+# Copyright (C) 2017 Amazon.com, Inc. or its affiliates
 #
 # Author: Scott Moser <scott.moser@canonical.com>
 # Author: Juerg Haefliger <juerg.haefliger@hp.com>
 # Author: Joshua Harlow <harlowja@yahoo-inc.com>
+# Author: Andrew Jorgensen <ajorgens@amazon.com>
 #
 # This file is part of cloud-init. See LICENSE file for license information.
 
@@ -25,9 +27,10 @@ from cloudinit import netinfo
 from cloudinit import signal_handler
 from cloudinit import sources
 from cloudinit import stages
-from cloudinit import templater
+from cloudinit import url_helper
 from cloudinit import util
 from cloudinit import version
+from cloudinit import warnings
 
 from cloudinit import reporting
 from cloudinit.reporting import events
@@ -37,22 +40,16 @@ from cloudinit.settings import (PER_INSTANCE, PER_ALWAYS, PER_ONCE,
 
 from cloudinit import atomic_helper
 
+from cloudinit.config import cc_set_hostname
 from cloudinit.dhclient_hook import LogDhclient
 
 
-# Pretty little cheetah formatted welcome message template
-WELCOME_MSG_TPL = ("Cloud-init v. ${version} running '${action}' at "
-                   "${timestamp}. Up ${uptime} seconds.")
+# Welcome message template
+WELCOME_MSG_TPL = ("Cloud-init v. {version} running '{action}' at "
+                   "{timestamp}. Up {uptime} seconds.")
 
 # Module section template
 MOD_SECTION_TPL = "cloud_%s_modules"
-
-# Things u can query on
-QUERY_DATA_TYPES = [
-    'data',
-    'data_raw',
-    'instance_id',
-]
 
 # Frequency shortname to full name
 # (so users don't have to remember the full name...)
@@ -86,13 +83,11 @@ def welcome(action, msg=None):
 
 
 def welcome_format(action):
-    tpl_params = {
-        'version': version.version_string(),
-        'uptime': util.uptime(),
-        'timestamp': util.time_rfc2822(),
-        'action': action,
-    }
-    return templater.render_string(WELCOME_MSG_TPL, tpl_params)
+    return WELCOME_MSG_TPL.format(
+        version=version.version_string(),
+        uptime=util.uptime(),
+        timestamp=util.time_rfc2822(),
+        action=action)
 
 
 def extract_fns(args):
@@ -129,23 +124,102 @@ def apply_reporting_cfg(cfg):
         reporting.update_configuration(cfg.get('reporting'))
 
 
+def parse_cmdline_url(cmdline, names=('cloud-config-url', 'url')):
+    data = util.keyval_str_to_dict(cmdline)
+    for key in names:
+        if key in data:
+            return key, data[key]
+    raise KeyError("No keys (%s) found in string '%s'" %
+                   (cmdline, names))
+
+
+def attempt_cmdline_url(path, network=True, cmdline=None):
+    """Write data from url referenced in command line to path.
+
+    path: a file to write content to if downloaded.
+    network: should network access be assumed.
+    cmdline: the cmdline to parse for cloud-config-url.
+
+    This is used in MAAS datasource, in "ephemeral" (read-only root)
+    environment where the instance netboots to iscsi ro root.
+    and the entity that controls the pxe config has to configure
+    the maas datasource.
+
+    An attempt is made on network urls even in local datasource
+    for case of network set up in initramfs.
+
+    Return value is a tuple of a logger function (logging.DEBUG)
+    and a message indicating what happened.
+    """
+
+    if cmdline is None:
+        cmdline = util.get_cmdline()
+
+    try:
+        cmdline_name, url = parse_cmdline_url(cmdline)
+    except KeyError:
+        return (logging.DEBUG, "No kernel command line url found.")
+
+    path_is_local = url.startswith("file://") or url.startswith("/")
+
+    if path_is_local and os.path.exists(path):
+        if network:
+            m = ("file '%s' existed, possibly from local stage download"
+                 " of command line url '%s'. Not re-writing." % (path, url))
+            level = logging.INFO
+            if path_is_local:
+                level = logging.DEBUG
+        else:
+            m = ("file '%s' existed, possibly from previous boot download"
+                 " of command line url '%s'. Not re-writing." % (path, url))
+            level = logging.WARN
+
+        return (level, m)
+
+    kwargs = {'url': url, 'timeout': 10, 'retries': 2}
+    if network or path_is_local:
+        level = logging.WARN
+        kwargs['sec_between'] = 1
+    else:
+        level = logging.DEBUG
+        kwargs['sec_between'] = .1
+
+    data = None
+    header = b'#cloud-config'
+    try:
+        resp = url_helper.read_file_or_url(**kwargs)
+        if resp.ok():
+            data = resp.contents
+            if not resp.contents.startswith(header):
+                if cmdline_name == 'cloud-config-url':
+                    level = logging.WARN
+                else:
+                    level = logging.INFO
+                return (
+                    level,
+                    "contents of '%s' did not start with %s" % (url, header))
+        else:
+            return (level,
+                    "url '%s' returned code %s. Ignoring." % (url, resp.code))
+
+    except url_helper.UrlError as e:
+        return (level, "retrieving url '%s' failed: %s" % (url, e))
+
+    util.write_file(path, data, mode=0o600)
+    return (logging.INFO,
+            "wrote cloud-config data from %s='%s' to %s" %
+            (cmdline_name, url, path))
+
+
 def main_init(name, args):
     deps = [sources.DEP_FILESYSTEM, sources.DEP_NETWORK]
     if args.local:
         deps = [sources.DEP_FILESYSTEM]
 
-    if not args.local:
-        # See doc/kernel-cmdline.txt
-        #
-        # This is used in maas datasource, in "ephemeral" (read-only root)
-        # environment where the instance netboots to iscsi ro root.
-        # and the entity that controls the pxe config has to configure
-        # the maas datasource.
-        #
-        # Could be used elsewhere, only works on network based (not local).
-        root_name = "%s.d" % (CLOUD_CONFIG)
-        target_fn = os.path.join(root_name, "91_kernel_cmdline_url.cfg")
-        util.read_write_cmdline_url(target_fn)
+    early_logs = [attempt_cmdline_url(
+        path=os.path.join("%s.d" % CLOUD_CONFIG,
+                          "91_kernel_cmdline_url.cfg"),
+        network=not args.local)]
 
     # Cloud-init 'init' stage is broken up into the following sub-stages
     # 1. Ensure that the init object fetches its config without errors
@@ -171,12 +245,14 @@ def main_init(name, args):
     outfmt = None
     errfmt = None
     try:
-        LOG.debug("Closing stdin")
+        early_logs.append((logging.DEBUG, "Closing stdin."))
         util.close_stdin()
         (outfmt, errfmt) = util.fixup_output(init.cfg, name)
     except Exception:
-        util.logexc(LOG, "Failed to setup output redirection!")
-        print_exc("Failed to setup output redirection!")
+        msg = "Failed to setup output redirection!"
+        util.logexc(LOG, msg)
+        print_exc(msg)
+        early_logs.append((logging.WARN, msg))
     if args.debug:
         # Reset so that all the debug handlers are closed out
         LOG.debug(("Logging being reset, this logger may no"
@@ -189,6 +265,10 @@ def main_init(name, args):
     # config applied.  We send the welcome message now, as stderr/out have
     # been redirected and log now configured.
     welcome(name, msg=w_msg)
+
+    # re-play early log messages before logging was setup
+    for lvl, msg in early_logs:
+        LOG.log(lvl, msg)
 
     # Stage 3
     try:
@@ -224,8 +304,15 @@ def main_init(name, args):
                       " would allow us to stop early.")
     else:
         existing = "check"
-        if util.get_cfg_option_bool(init.cfg, 'manual_cache_clean', False):
+        mcfg = util.get_cfg_option_bool(init.cfg, 'manual_cache_clean', False)
+        if mcfg:
+            LOG.debug("manual cache clean set from config")
             existing = "trust"
+        else:
+            mfile = path_helper.get_ipath_cur("manual_clean_marker")
+            if os.path.exists(mfile):
+                LOG.debug("manual cache clean found from marker: %s", mfile)
+                existing = "trust"
 
         init.purge_cache()
         # Delete the non-net file as well
@@ -266,6 +353,11 @@ def main_init(name, args):
     LOG.debug("[%s] %s will now be targeting instance id: %s. new=%s",
               mode, name, iid, init.is_new_instance())
 
+    if mode == sources.DSMODE_LOCAL:
+        # Before network comes up, set any configured hostname to allow
+        # dhcp clients to advertize this hostname to any DDNS services
+        # LP: #1746455.
+        _maybe_set_hostname(init, stage='local', retry_stage='network')
     init.apply_network_config(bring_up=bool(mode != sources.DSMODE_LOCAL))
 
     if mode == sources.DSMODE_LOCAL:
@@ -277,8 +369,12 @@ def main_init(name, args):
             LOG.debug("[%s] %s is in local mode, will apply init modules now.",
                       mode, init.datasource)
 
+    # Give the datasource a chance to use network resources.
+    # This is used on Azure to communicate with the fabric over network.
+    init.setup_datasource()
     # update fully realizes user-data (pulling in #include if necessary)
     init.update()
+    _maybe_set_hostname(init, stage='init-net', retry_stage='modules:config')
     # Stage 7
     try:
         # Attempt to consume the data per instance.
@@ -309,7 +405,8 @@ def main_init(name, args):
         errfmt_orig = errfmt
         (outfmt, errfmt) = util.get_output_cfg(mods.cfg, name)
         if outfmt_orig != outfmt or errfmt_orig != errfmt:
-            LOG.warn("Stdout, stderr changing to (%s, %s)", outfmt, errfmt)
+            LOG.warning("Stdout, stderr changing to (%s, %s)",
+                        outfmt, errfmt)
             (outfmt, errfmt) = util.fixup_output(mods.cfg, name)
     except Exception:
         util.logexc(LOG, "Failed to re-adjust output redirection!")
@@ -318,8 +415,52 @@ def main_init(name, args):
     # give the activated datasource a chance to adjust
     init.activate_datasource()
 
+    di_report_warn(datasource=init.datasource, cfg=init.cfg)
+
     # Stage 10
     return (init.datasource, run_module_section(mods, name, name))
+
+
+def di_report_warn(datasource, cfg):
+    if 'di_report' not in cfg:
+        LOG.debug("no di_report found in config.")
+        return
+
+    dicfg = cfg['di_report']
+    if dicfg is None:
+        # ds-identify may write 'di_report:\n #comment\n'
+        # which reads as {'di_report': None}
+        LOG.debug("di_report was None.")
+        return
+
+    if not isinstance(dicfg, dict):
+        LOG.warning("di_report config not a dictionary: %s", dicfg)
+        return
+
+    dslist = dicfg.get('datasource_list')
+    if dslist is None:
+        LOG.warning("no 'datasource_list' found in di_report.")
+        return
+    elif not isinstance(dslist, list):
+        LOG.warning("di_report/datasource_list not a list: %s", dslist)
+        return
+
+    # ds.__module__ is like cloudinit.sources.DataSourceName
+    # where Name is the thing that shows up in datasource_list.
+    modname = datasource.__module__.rpartition(".")[2]
+    if modname.startswith(sources.DS_PREFIX):
+        modname = modname[len(sources.DS_PREFIX):]
+    else:
+        LOG.warning("Datasource '%s' came from unexpected module '%s'.",
+                    datasource, modname)
+
+    if modname in dslist:
+        LOG.debug("used datasource '%s' from '%s' was in di_report's list: %s",
+                  datasource, modname, dslist)
+        return
+
+    warnings.show_warning('dsid_missing_source', cfg,
+                          source=modname, dslist=str(dslist))
 
 
 def main_modules(action_name, args):
@@ -371,11 +512,6 @@ def main_modules(action_name, args):
 
     # Stage 5
     return run_module_section(mods, name, name)
-
-
-def main_query(name, _args):
-    raise NotImplementedError(("Action '%s' is not"
-                               " currently implemented") % (name))
 
 
 def main_single(name, args):
@@ -437,10 +573,10 @@ def main_single(name, args):
                                             mod_args,
                                             mod_freq)
     if failures:
-        LOG.warn("Ran %s but it failed!", mod_name)
+        LOG.warning("Ran %s but it failed!", mod_name)
         return 1
     elif not which_ran:
-        LOG.warn("Did not run %s, does it exist?", mod_name)
+        LOG.warning("Did not run %s, does it exist?", mod_name)
         return 1
     else:
         # Guess it worked
@@ -478,7 +614,11 @@ def status_wrapper(name, args, data_d=None, link_d=None):
     else:
         raise ValueError("unknown name: %s" % name)
 
-    modes = ('init', 'init-local', 'modules-config', 'modules-final')
+    modes = ('init', 'init-local', 'modules-init', 'modules-config',
+             'modules-final')
+    if mode not in modes:
+        raise ValueError(
+            "Invalid cloud init mode specified '{0}'".format(mode))
 
     status = None
     if mode == 'init-local':
@@ -490,16 +630,18 @@ def status_wrapper(name, args, data_d=None, link_d=None):
         except Exception:
             pass
 
+    nullstatus = {
+        'errors': [],
+        'start': None,
+        'finished': None,
+    }
     if status is None:
-        nullstatus = {
-            'errors': [],
-            'start': None,
-            'finished': None,
-        }
         status = {'v1': {}}
         for m in modes:
             status['v1'][m] = nullstatus.copy()
         status['v1']['datasource'] = None
+    elif mode not in status['v1']:
+        status['v1'][mode] = nullstatus.copy()
 
     v1 = status['v1']
     v1['stage'] = mode
@@ -546,12 +688,33 @@ def status_wrapper(name, args, data_d=None, link_d=None):
     return len(v1[mode]['errors'])
 
 
+def _maybe_set_hostname(init, stage, retry_stage):
+    """Call set-hostname if metadata, vendordata or userdata provides it.
+
+    @param stage: String representing current stage in which we are running.
+    @param retry_stage: String represented logs upon error setting hostname.
+    """
+    cloud = init.cloudify()
+    (hostname, _fqdn) = util.get_hostname_fqdn(
+        init.cfg, cloud, metadata_only=True)
+    if hostname:  # meta-data or user-data hostname content
+        try:
+            cc_set_hostname.handle('set-hostname', init.cfg, cloud, LOG, None)
+        except cc_set_hostname.SetHostnameError as e:
+            LOG.debug(
+                'Failed setting hostname in %s stage. Will'
+                ' retry in %s stage. Error: %s.', stage, retry_stage, str(e))
+
+
+def main_features(name, args):
+    sys.stdout.write('\n'.join(sorted(version.FEATURES)) + '\n')
+
+
 def main(sysv_args=None):
-    if sysv_args is not None:
-        parser = argparse.ArgumentParser(prog=sysv_args[0])
-        sysv_args = sysv_args[1:]
-    else:
-        parser = argparse.ArgumentParser()
+    if not sysv_args:
+        sysv_args = sys.argv
+    parser = argparse.ArgumentParser(prog=sysv_args[0])
+    sysv_args = sysv_args[1:]
 
     # Top level args
     parser.add_argument('--version', '-v', action='version',
@@ -572,7 +735,8 @@ def main(sysv_args=None):
                         default=False)
 
     parser.set_defaults(reporter=None)
-    subparsers = parser.add_subparsers()
+    subparsers = parser.add_subparsers(title='Subcommands', dest='subcommand')
+    subparsers.required = True
 
     # Each action and its sub-options (if any)
     parser_init = subparsers.add_parser('init',
@@ -595,17 +759,6 @@ def main(sysv_args=None):
                             default='config',
                             choices=('init', 'config', 'final'))
     parser_mod.set_defaults(action=('modules', main_modules))
-
-    # These settings are used when you want to query information
-    # stored in the cloud-init data objects/directories/files
-    parser_query = subparsers.add_parser('query',
-                                         help=('query information stored '
-                                               'in cloud-init'))
-    parser_query.add_argument("--name", '-n', action="store",
-                              help="item name to query on",
-                              required=True,
-                              choices=QUERY_DATA_TYPES)
-    parser_query.set_defaults(action=('query', main_query))
 
     # This subcommand allows you to run a single module
     parser_single = subparsers.add_parser('single',
@@ -636,15 +789,61 @@ def main(sysv_args=None):
                                        ' upon'))
     parser_dhclient.set_defaults(action=('dhclient_hook', dhclient_hook))
 
+    parser_features = subparsers.add_parser('features',
+                                            help=('list defined features'))
+    parser_features.set_defaults(action=('features', main_features))
+
+    parser_analyze = subparsers.add_parser(
+        'analyze', help='Devel tool: Analyze cloud-init logs and data')
+
+    parser_devel = subparsers.add_parser(
+        'devel', help='Run development tools')
+
+    parser_collect_logs = subparsers.add_parser(
+        'collect-logs', help='Collect and tar all cloud-init debug info')
+
+    parser_clean = subparsers.add_parser(
+        'clean', help='Remove logs and artifacts so cloud-init can re-run.')
+
+    parser_status = subparsers.add_parser(
+        'status', help='Report cloud-init status or wait on completion.')
+
+    if sysv_args:
+        # Only load subparsers if subcommand is specified to avoid load cost
+        if sysv_args[0] == 'analyze':
+            from cloudinit.analyze.__main__ import get_parser as analyze_parser
+            # Construct analyze subcommand parser
+            analyze_parser(parser_analyze)
+        elif sysv_args[0] == 'devel':
+            from cloudinit.cmd.devel.parser import get_parser as devel_parser
+            # Construct devel subcommand parser
+            devel_parser(parser_devel)
+        elif sysv_args[0] == 'collect-logs':
+            from cloudinit.cmd.devel.logs import (
+                get_parser as logs_parser, handle_collect_logs_args)
+            logs_parser(parser_collect_logs)
+            parser_collect_logs.set_defaults(
+                action=('collect-logs', handle_collect_logs_args))
+        elif sysv_args[0] == 'clean':
+            from cloudinit.cmd.clean import (
+                get_parser as clean_parser, handle_clean_args)
+            clean_parser(parser_clean)
+            parser_clean.set_defaults(
+                action=('clean', handle_clean_args))
+        elif sysv_args[0] == 'status':
+            from cloudinit.cmd.status import (
+                get_parser as status_parser, handle_status_args)
+            status_parser(parser_status)
+            parser_status.set_defaults(
+                action=('status', handle_status_args))
+
     args = parser.parse_args(args=sysv_args)
 
-    try:
-        (name, functor) = args.action
-    except AttributeError:
-        parser.error('too few arguments')
+    # Subparsers.required = True and each subparser sets action=(name, functor)
+    (name, functor) = args.action
 
     # Setup basic logging to start (until reinitialized)
-    # iff in debug mode...
+    # iff in debug mode.
     if args.debug:
         logging.setupBasicLogging()
 
@@ -654,6 +853,7 @@ def main(sysv_args=None):
     if name in ("modules", "init"):
         functor = status_wrapper
 
+    rname = None
     report_on = True
     if name == "init":
         if args.local:
@@ -668,10 +868,10 @@ def main(sysv_args=None):
         rname, rdesc = ("single/%s" % args.name,
                         "running single module %s" % args.name)
         report_on = args.report
-
-    elif name == 'dhclient_hook':
-        rname, rdesc = ("dhclient-hook",
-                        "running dhclient-hook module")
+    else:
+        rname = name
+        rdesc = "running 'cloud-init %s'" % name
+        report_on = False
 
     args.reporter = events.ReportEventStack(
         rname, rdesc, reporting_enabled=report_on)

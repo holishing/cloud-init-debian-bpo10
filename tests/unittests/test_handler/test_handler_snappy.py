@@ -7,9 +7,9 @@ from cloudinit.config.cc_snap_config import (
 from cloudinit import (distros, helpers, cloud, util)
 from cloudinit.config.cc_snap_config import handle as snap_handle
 from cloudinit.sources import DataSourceNone
-from ..helpers import FilesystemMockingTestCase, mock
+from cloudinit.tests.helpers import FilesystemMockingTestCase, mock
 
-from .. import helpers as t_help
+from cloudinit.tests import helpers as t_help
 
 import logging
 import os
@@ -419,7 +419,7 @@ class TestSnapConfig(FilesystemMockingTestCase):
 
     def test_snap_config_add_snap_user_no_config(self):
         usercfg = add_snap_user(cfg=None)
-        self.assertEqual(usercfg, None)
+        self.assertIsNone(usercfg)
 
     def test_snap_config_add_snap_user_not_dict(self):
         cfg = ['foobar']
@@ -428,7 +428,7 @@ class TestSnapConfig(FilesystemMockingTestCase):
     def test_snap_config_add_snap_user_no_email(self):
         cfg = {'assertions': [], 'known': True}
         usercfg = add_snap_user(cfg=cfg)
-        self.assertEqual(usercfg, None)
+        self.assertIsNone(usercfg)
 
     @mock.patch('cloudinit.config.cc_snap_config.util')
     def test_snap_config_add_snap_user_email_only(self, mock_util):

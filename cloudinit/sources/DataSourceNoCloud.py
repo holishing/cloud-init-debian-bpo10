@@ -20,6 +20,9 @@ LOG = logging.getLogger(__name__)
 
 
 class DataSourceNoCloud(sources.DataSource):
+
+    dsname = "NoCloud"
+
     def __init__(self, sys_cfg, distro, paths):
         sources.DataSource.__init__(self, sys_cfg, distro, paths)
         self.seed = None
@@ -32,7 +35,7 @@ class DataSourceNoCloud(sources.DataSource):
         root = sources.DataSource.__str__(self)
         return "%s [seed=%s][dsmode=%s]" % (root, self.seed, self.dsmode)
 
-    def get_data(self):
+    def _get_data(self):
         defaults = {
             "instance-id": "nocloud",
             "dsmode": self.dsmode,
@@ -41,6 +44,18 @@ class DataSourceNoCloud(sources.DataSource):
         found = []
         mydata = {'meta-data': {}, 'user-data': "", 'vendor-data': "",
                   'network-config': None}
+
+        try:
+            # Parse the system serial label from dmi. If not empty, try parsing
+            # like the commandline
+            md = {}
+            serial = util.read_dmi_data('system-serial-number')
+            if serial and load_cmdline_data(md, serial):
+                found.append("dmi")
+                mydata = _merge_new_seed(mydata, {'meta-data': md})
+        except Exception:
+            util.logexc(LOG, "Unable to parse dmi data")
+            return False
 
         try:
             # Parse the kernel command line, getting data passed in
@@ -63,7 +78,7 @@ class DataSourceNoCloud(sources.DataSource):
                 LOG.debug("Using seeded data from %s", path)
                 mydata = _merge_new_seed(mydata, seeded)
                 break
-            except ValueError as e:
+            except ValueError:
                 pass
 
         # If the datasource config had a 'seedfrom' entry, then that takes
@@ -102,10 +117,10 @@ class DataSourceNoCloud(sources.DataSource):
                     try:
                         seeded = util.mount_cb(dev, _pp2d_callback,
                                                pp2d_kwargs)
-                    except ValueError as e:
+                    except ValueError:
                         if dev in label_list:
-                            LOG.warn("device %s with label=%s not a"
-                                     "valid seed.", dev, label)
+                            LOG.warning("device %s with label=%s not a"
+                                        "valid seed.", dev, label)
                         continue
 
                     mydata = _merge_new_seed(mydata, seeded)

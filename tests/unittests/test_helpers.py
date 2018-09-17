@@ -4,7 +4,7 @@
 
 import os
 
-from . import helpers as test_helpers
+from cloudinit.tests import helpers as test_helpers
 
 from cloudinit import sources
 
@@ -32,6 +32,6 @@ class TestPaths(test_helpers.ResourceUsingTestCase):
         myds._instance_id = None
         mypaths = self.getCloudPaths(myds)
 
-        self.assertEqual(None, mypaths.get_ipath())
+        self.assertIsNone(mypaths.get_ipath())
 
 # vi: ts=4 expandtab

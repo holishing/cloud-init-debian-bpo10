@@ -2,7 +2,7 @@
 
 from __future__ import print_function
 
-from . import helpers as test_helpers
+from cloudinit.tests import helpers as test_helpers
 
 from cloudinit.cs_utils import Cepko
 
@@ -35,6 +35,7 @@ class CepkoMock(Cepko):
 # touched the underlying Cepko class methods.
 class CepkoResultTests(test_helpers.TestCase):
     def setUp(self):
+        self.c = Cepko()
         raise test_helpers.SkipTest('This test is completely useless')
 
     def test_getitem(self):

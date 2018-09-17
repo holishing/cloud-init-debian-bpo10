@@ -9,40 +9,14 @@ import base64
 import glob
 import gzip
 import io
-import shlex
-import sys
-
-import six
+import os
 
 from . import get_devicelist
 from . import read_sys_net_safe
 
 from cloudinit import util
 
-PY26 = sys.version_info[0:2] == (2, 6)
-
-
-def _shlex_split(blob):
-    if PY26 and isinstance(blob, six.text_type):
-        # Older versions don't support unicode input
-        blob = blob.encode("utf8")
-    return shlex.split(blob)
-
-
-def _load_shell_content(content, add_empty=False, empty_val=None):
-    """Given shell like syntax (key=value\nkey2=value2\n) in content
-       return the data in dictionary form.  If 'add_empty' is True
-       then add entries in to the returned dictionary for 'VAR='
-       variables.  Set their value to empty_val."""
-    data = {}
-    for line in _shlex_split(content):
-        key, value = line.split("=", 1)
-        if not value:
-            value = empty_val
-        if add_empty or value:
-            data[key] = value
-
-    return data
+_OPEN_ISCSI_INTERFACE_FILE = "/run/initramfs/open-iscsi.interface"
 
 
 def _klibc_to_config_entry(content, mac_addrs=None):
@@ -63,7 +37,7 @@ def _klibc_to_config_entry(content, mac_addrs=None):
     if mac_addrs is None:
         mac_addrs = {}
 
-    data = _load_shell_content(content)
+    data = util.load_shell_content(content)
     try:
         name = data['DEVICE'] if 'DEVICE' in data else data['DEVICE6']
     except KeyError:
@@ -91,7 +65,7 @@ def _klibc_to_config_entry(content, mac_addrs=None):
         iface['mac_address'] = mac_addrs[name]
 
     # Handle both IPv4 and IPv6 values
-    for v, pre in (('ipv4', 'IPV4'), ('ipv6', 'IPV6')):
+    for pre in ('IPV4', 'IPV6'):
         # if no IPV4ADDR or IPV6ADDR, then go on.
         if pre + "ADDR" not in data:
             continue
@@ -99,6 +73,11 @@ def _klibc_to_config_entry(content, mac_addrs=None):
         # PROTO for ipv4, IPV6PROTO for ipv6
         cur_proto = data.get(pre + 'PROTO', proto)
         subnet = {'type': cur_proto, 'control': 'manual'}
+
+        # only populate address for static types. While the rendered config
+        # may have an address for dhcp, that is not really expected.
+        if cur_proto == 'static':
+            subnet['address'] = data[pre + 'ADDR']
 
         # these fields go right on the subnet
         for key in ('NETMASK', 'BROADCAST', 'GATEWAY'):
@@ -127,9 +106,13 @@ def _klibc_to_config_entry(content, mac_addrs=None):
     return name, iface
 
 
+def _get_klibc_net_cfg_files():
+    return glob.glob('/run/net-*.conf') + glob.glob('/run/net6-*.conf')
+
+
 def config_from_klibc_net_cfg(files=None, mac_addrs=None):
     if files is None:
-        files = glob.glob('/run/net-*.conf') + glob.glob('/run/net6-*.conf')
+        files = _get_klibc_net_cfg_files()
 
     entries = []
     names = {}
@@ -140,10 +123,11 @@ def config_from_klibc_net_cfg(files=None, mac_addrs=None):
             prev = names[name]['entry']
             if prev.get('mac_address') != entry.get('mac_address'):
                 raise ValueError(
-                    "device '%s' was defined multiple times (%s)"
-                    " but had differing mac addresses: %s -> %s.",
-                    (name, ' '.join(names[name]['files']),
-                     prev.get('mac_address'), entry.get('mac_address')))
+                    "device '{name}' was defined multiple times ({files})"
+                    " but had differing mac addresses: {old} -> {new}.".format(
+                        name=name, files=' '.join(names[name]['files']),
+                        old=prev.get('mac_address'),
+                        new=entry.get('mac_address')))
             prev['subnets'].extend(entry['subnets'])
             names[name]['files'].append(cfg_file)
         else:
@@ -183,9 +167,22 @@ def _b64dgz(b64str, gzipped="try"):
     return _decomp_gzip(blob, strict=gzipped != "try")
 
 
+def _is_initramfs_netconfig(files, cmdline):
+    if files:
+        if 'ip=' in cmdline or 'ip6=' in cmdline:
+            return True
+        if os.path.exists(_OPEN_ISCSI_INTERFACE_FILE):
+            # iBft can configure networking without ip=
+            return True
+    return False
+
+
 def read_kernel_cmdline_config(files=None, mac_addrs=None, cmdline=None):
     if cmdline is None:
         cmdline = util.get_cmdline()
+
+    if files is None:
+        files = _get_klibc_net_cfg_files()
 
     if 'network-config=' in cmdline:
         data64 = None
@@ -195,7 +192,7 @@ def read_kernel_cmdline_config(files=None, mac_addrs=None, cmdline=None):
         if data64:
             return util.load_yaml(_b64dgz(data64))
 
-    if 'ip=' not in cmdline and 'ip6=' not in cmdline:
+    if not _is_initramfs_netconfig(files, cmdline):
         return None
 
     if mac_addrs is None:

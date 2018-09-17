@@ -6,15 +6,16 @@ import os
 import re
 import socket
 import struct
-import tempfile
 import time
 
+from cloudinit.net import dhcp
 from cloudinit import stages
+from cloudinit import temp_utils
 from contextlib import contextmanager
 from xml.etree import ElementTree
 
+from cloudinit import url_helper
 from cloudinit import util
-
 
 LOG = logging.getLogger(__name__)
 
@@ -27,6 +28,14 @@ def cd(newdir):
         yield
     finally:
         os.chdir(prevdir)
+
+
+def _get_dhcp_endpoint_option_name():
+    if util.is_FreeBSD():
+        azure_endpoint = "option-245"
+    else:
+        azure_endpoint = "unknown-245"
+    return azure_endpoint
 
 
 class AzureEndpointHttpClient(object):
@@ -47,14 +56,14 @@ class AzureEndpointHttpClient(object):
         if secure:
             headers = self.headers.copy()
             headers.update(self.extra_secure_headers)
-        return util.read_file_or_url(url, headers=headers)
+        return url_helper.read_file_or_url(url, headers=headers)
 
     def post(self, url, data=None, extra_headers=None):
         headers = self.headers
         if extra_headers is not None:
             headers = self.headers.copy()
             headers.update(extra_headers)
-        return util.read_file_or_url(url, data=data, headers=headers)
+        return url_helper.read_file_or_url(url, data=data, headers=headers)
 
 
 class GoalState(object):
@@ -103,7 +112,7 @@ class OpenSSLManager(object):
     }
 
     def __init__(self):
-        self.tmpdir = tempfile.mkdtemp()
+        self.tmpdir = temp_utils.mkdtemp()
         self.certificate = None
         self.generate_certificate()
 
@@ -191,10 +200,10 @@ class WALinuxAgentShim(object):
         '  </Container>',
         '</Health>'])
 
-    def __init__(self, fallback_lease_file=None):
+    def __init__(self, fallback_lease_file=None, dhcp_options=None):
         LOG.debug('WALinuxAgentShim instantiated, fallback_lease_file=%s',
                   fallback_lease_file)
-        self.dhcpoptions = None
+        self.dhcpoptions = dhcp_options
         self._endpoint = None
         self.openssl_manager = None
         self.values = {}
@@ -212,7 +221,8 @@ class WALinuxAgentShim(object):
     @property
     def endpoint(self):
         if self._endpoint is None:
-            self._endpoint = self.find_endpoint(self.lease_file)
+            self._endpoint = self.find_endpoint(self.lease_file,
+                                                self.dhcpoptions)
         return self._endpoint
 
     @staticmethod
@@ -231,12 +241,18 @@ class WALinuxAgentShim(object):
         return socket.inet_ntoa(packed_bytes)
 
     @staticmethod
+    def _networkd_get_value_from_leases(leases_d=None):
+        return dhcp.networkd_get_option_from_leases(
+            'OPTION_245', leases_d=leases_d)
+
+    @staticmethod
     def _get_value_from_leases_file(fallback_lease_file):
         leases = []
         content = util.load_file(fallback_lease_file)
         LOG.debug("content is %s", content)
+        option_name = _get_dhcp_endpoint_option_name()
         for line in content.splitlines():
-            if 'unknown-245' in line:
+            if option_name in line:
                 # Example line from Ubuntu
                 # option unknown-245 a8:3f:81:10;
                 leases.append(line.strip(' ').split(' ', 2)[-1].strip(';\n"'))
@@ -260,7 +276,8 @@ class WALinuxAgentShim(object):
                 name = os.path.basename(hook_file).replace('.json', '')
                 dhcp_options[name] = json.loads(util.load_file((hook_file)))
             except ValueError:
-                raise ValueError("%s is not valid JSON data", hook_file)
+                raise ValueError(
+                    '{_file} is not valid JSON data'.format(_file=hook_file))
         return dhcp_options
 
     @staticmethod
@@ -277,19 +294,26 @@ class WALinuxAgentShim(object):
         return _value
 
     @staticmethod
-    def find_endpoint(fallback_lease_file=None):
-        LOG.debug('Finding Azure endpoint...')
+    def find_endpoint(fallback_lease_file=None, dhcp245=None):
         value = None
-        # Option-245 stored in /run/cloud-init/dhclient.hooks/<ifc>.json
-        # a dhclient exit hook that calls cloud-init-dhclient-hook
-        dhcp_options = WALinuxAgentShim._load_dhclient_json()
-        value = WALinuxAgentShim._get_value_from_dhcpoptions(dhcp_options)
+        if dhcp245 is not None:
+            value = dhcp245
+            LOG.debug("Using Azure Endpoint from dhcp options")
+        if value is None:
+            LOG.debug('Finding Azure endpoint from networkd...')
+            value = WALinuxAgentShim._networkd_get_value_from_leases()
+        if value is None:
+            # Option-245 stored in /run/cloud-init/dhclient.hooks/<ifc>.json
+            # a dhclient exit hook that calls cloud-init-dhclient-hook
+            LOG.debug('Finding Azure endpoint from hook json...')
+            dhcp_options = WALinuxAgentShim._load_dhclient_json()
+            value = WALinuxAgentShim._get_value_from_dhcpoptions(dhcp_options)
         if value is None:
             # Fallback and check the leases file if unsuccessful
             LOG.debug("Unable to find endpoint in dhclient logs. "
                       " Falling back to check lease files")
             if fallback_lease_file is None:
-                LOG.warn("No fallback lease file was specified.")
+                LOG.warning("No fallback lease file was specified.")
                 value = None
             else:
                 LOG.debug("Looking for endpoint in lease file %s",
@@ -349,8 +373,9 @@ class WALinuxAgentShim(object):
         LOG.info('Reported ready to Azure fabric.')
 
 
-def get_metadata_from_fabric(fallback_lease_file=None):
-    shim = WALinuxAgentShim(fallback_lease_file=fallback_lease_file)
+def get_metadata_from_fabric(fallback_lease_file=None, dhcp_opts=None):
+    shim = WALinuxAgentShim(fallback_lease_file=fallback_lease_file,
+                            dhcp_options=dhcp_opts)
     try:
         return shim.register_with_azure_and_fetch_data()
     finally:

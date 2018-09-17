@@ -59,14 +59,16 @@ def set_customization_status(custstate, custerror, errormessage=None):
     return (out, err)
 
 
-# This will read the file nics.txt in the specified directory
-# and return the content
-def get_nics_to_enable(dirpath):
-    if not dirpath:
+def get_nics_to_enable(nicsfilepath):
+    """Reads the NICS from the specified file path and returns the content
+
+    @param nicsfilepath: Absolute file path to the NICS.txt file.
+    """
+
+    if not nicsfilepath:
         return None
 
     NICS_SIZE = 1024
-    nicsfilepath = os.path.join(dirpath, "nics.txt")
     if not os.path.exists(nicsfilepath):
         return None
 
@@ -89,7 +91,7 @@ def enable_nics(nics):
 
     for attempt in range(0, enableNicsWaitRetries):
         logger.debug("Trying to connect interfaces, attempt %d", attempt)
-        (out, err) = set_customization_status(
+        (out, _err) = set_customization_status(
             GuestCustStateEnum.GUESTCUST_STATE_RUNNING,
             GuestCustEventEnum.GUESTCUST_EVENT_ENABLE_NICS,
             nics)
@@ -102,7 +104,7 @@ def enable_nics(nics):
             return
 
         for count in range(0, enableNicsWaitCount):
-            (out, err) = set_customization_status(
+            (out, _err) = set_customization_status(
                 GuestCustStateEnum.GUESTCUST_STATE_RUNNING,
                 GuestCustEventEnum.GUESTCUST_EVENT_QUERY_NICS,
                 nics)

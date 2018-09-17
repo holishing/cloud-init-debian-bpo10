@@ -20,15 +20,15 @@ which defaults to ``20-cloud-config.conf``. The rsyslog config directory to
 write config files to may be specified in ``config_dir``, which defaults to
 ``/etc/rsyslog.d``.
 
-A list of configurations for for rsyslog can be specified under the ``configs``
-key in the ``rsyslog`` config. Each entry in ``configs`` is either a string or
-a dictionary. Each config entry contains a configuration string and a file to
+A list of configurations for rsyslog can be specified under the ``configs`` key
+in the ``rsyslog`` config. Each entry in ``configs`` is either a string or a
+dictionary. Each config entry contains a configuration string and a file to
 write it to. For config entries that are a dictionary, ``filename`` sets the
 target filename and ``content`` specifies the config string to write. For
 config entries that are only a string, the string is used as the config string
 to write. If the filename to write the config to is not specified, the value of
-the ``config_filename`` key is used. A file with the selected filename will
-be written inside the directory specified by ``config_dir``.
+the ``config_filename`` key is used. A file with the selected filename will be
+written inside the directory specified by ``config_dir``.
 
 The command to use to reload the rsyslog service after the config has been
 updated can be specified in ``service_reload_command``. If this is set to
@@ -203,8 +203,8 @@ LOG = logging.getLogger(__name__)
 COMMENT_RE = re.compile(r'[ ]*[#]+[ ]*')
 HOST_PORT_RE = re.compile(
     r'^(?P<proto>[@]{0,2})'
-    '(([[](?P<bracket_addr>[^\]]*)[\]])|(?P<addr>[^:]*))'
-    '([:](?P<port>[0-9]+))?$')
+    r'(([[](?P<bracket_addr>[^\]]*)[\]])|(?P<addr>[^:]*))'
+    r'([:](?P<port>[0-9]+))?$')
 
 
 def reload_syslog(command=DEF_RELOAD, systemd=False):
@@ -252,7 +252,8 @@ def apply_rsyslog_changes(configs, def_fname, cfg_dir):
     for cur_pos, ent in enumerate(configs):
         if isinstance(ent, dict):
             if "content" not in ent:
-                LOG.warn("No 'content' entry in config entry %s", cur_pos + 1)
+                LOG.warning("No 'content' entry in config entry %s",
+                            cur_pos + 1)
                 continue
             content = ent['content']
             filename = ent.get("filename", def_fname)
@@ -262,7 +263,7 @@ def apply_rsyslog_changes(configs, def_fname, cfg_dir):
 
         filename = filename.strip()
         if not filename:
-            LOG.warn("Entry %s has an empty filename", cur_pos + 1)
+            LOG.warning("Entry %s has an empty filename", cur_pos + 1)
             continue
 
         filename = os.path.join(cfg_dir, filename)
@@ -389,7 +390,7 @@ def remotes_to_rsyslog_cfg(remotes, header=None, footer=None):
         try:
             lines.append(str(parse_remotes_line(line, name=name)))
         except ValueError as e:
-            LOG.warn("failed loading remote %s: %s [%s]", name, line, e)
+            LOG.warning("failed loading remote %s: %s [%s]", name, line, e)
     if footer is not None:
         lines.append(footer)
     return '\n'.join(lines) + "\n"

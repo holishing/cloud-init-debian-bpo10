@@ -3,9 +3,6 @@
 # Used for untemplating any files or strings with parameters.
 jinja2
 
-# This is used for any pretty printing of tabular data.
-PrettyTable
-
 # This one is currently only used by the MAAS datasource. If that
 # datasource is removed, this is no longer needed
 oauthlib
@@ -27,14 +24,14 @@ configobj>=5.0.2
 # All new style configurations are in the yaml format
 pyyaml
 
-# The new main entrypoint uses argparse instead of optparse
-argparse
-
 # Requests handles ssl correctly!
 requests
 
 # For patching pieces of cloud-config together
 jsonpatch
+
+# For validating cloud-config sections per schema definitions
+jsonschema
 
 # For Python 2/3 compatibility
 six

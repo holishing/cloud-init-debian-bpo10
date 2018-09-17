@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 
 import argparse
+import csv
 import json
 import os
 import shutil
 import sys
+
+UNRELEASED = "UNRELEASED"
 
 
 def find_root():
@@ -21,41 +24,29 @@ def find_root():
 if "avoid-pep8-E402-import-not-top-of-file":
     # Use the util functions from cloudinit
     sys.path.insert(0, find_root())
-    from cloudinit import templater
     from cloudinit import util
-
-# Package names that will showup in requires to what we can actually
-# use in our debian 'control' file, this is a translation of the 'requires'
-# file pypi package name to a debian/ubuntu package name.
-STD_NAMED_PACKAGES = [
-    'configobj',
-    'coverage',
-    'jinja2',
-    'jsonpatch',
-    'oauthlib',
-    'prettytable',
-    'requests',
-    'six',
-    'httpretty',
-    'mock',
-    'nose',
-    'setuptools',
-    'flake8',
-    'hacking',
-    'unittest2',
-]
-NONSTD_NAMED_PACKAGES = {
-    'argparse': ('python-argparse', None),
-    'contextlib2': ('python-contextlib2', None),
-    'cheetah': ('python-cheetah', None),
-    'pyserial': ('python-serial', 'python3-serial'),
-    'pyyaml': ('python-yaml', 'python3-yaml'),
-    'six': ('python-six', 'python3-six'),
-    'pep8': ('pep8', 'python3-pep8'),
-    'pyflakes': ('pyflakes', 'pyflakes'),
-}
+    from cloudinit import temp_utils
+    from cloudinit import templater
 
 DEBUILD_ARGS = ["-S", "-d"]
+
+
+def get_release_suffix(release):
+    """Given ubuntu release (xenial), return a suffix for package (~16.04.1)"""
+    csv_path = "/usr/share/distro-info/ubuntu.csv"
+    rels = {}
+    # fields are version, codename, series, created, release, eol, eol-server
+    if os.path.exists(csv_path):
+        with open(csv_path, "r") as fp:
+            # version has "16.04 LTS" or "16.10", so drop "LTS" portion.
+            rels = {row['series']: row['version'].replace(' LTS', '')
+                    for row in csv.DictReader(fp)}
+    if release in rels:
+        return "~%s.1" % rels[release]
+    elif release != UNRELEASED:
+        print("missing distro-info-data package, unable to give "
+              "per-release suffix.\n")
+    return ""
 
 
 def run_helper(helper, args=None, strip=True):
@@ -68,8 +59,16 @@ def run_helper(helper, args=None, strip=True):
     return stdout
 
 
-def write_debian_folder(root, templ_data, pkgmap, pyver="3",
-                        append_requires=[]):
+def write_debian_folder(root, templ_data, is_python2, cloud_util_deps):
+    """Create a debian package directory with all rendered template files."""
+    print("Creating a debian/ folder in %r" % (root))
+    if is_python2:
+        pyver = "2"
+        python = "python"
+    else:
+        pyver = "3"
+        python = "python3"
+
     deb_dir = util.abs_join(root, 'debian')
 
     # Just copy debian/ dir and then update files
@@ -83,35 +82,25 @@ def write_debian_folder(root, templ_data, pkgmap, pyver="3",
                              params=templ_data)
 
     # Write out the control file template
-    reqs = run_helper('read-dependencies').splitlines()
+    reqs_output = run_helper(
+        'read-dependencies',
+        args=['--distro', 'debian', '--python-version', pyver])
+    reqs = reqs_output.splitlines()
     test_reqs = run_helper(
-        'read-dependencies', ['test-requirements.txt']).splitlines()
+        'read-dependencies',
+        ['--requirements-file', 'test-requirements.txt',
+         '--system-pkg-names', '--python-version', pyver]).splitlines()
 
-    pypi_pkgs = [p.lower().strip() for p in reqs]
-    pypi_test_pkgs = [p.lower().strip() for p in test_reqs]
-
-    # Map to known packages
-    requires = append_requires
-    test_requires = []
-    lists = ((pypi_pkgs, requires), (pypi_test_pkgs, test_requires))
-    for pypilist, target in lists:
-        for p in pypilist:
-            if p not in pkgmap:
-                raise RuntimeError(("Do not know how to translate pypi "
-                                    "dependency %r to a known package") % (p))
-            elif pkgmap[p]:
-                target.append(pkgmap[p])
-
-    if pyver == "3":
-        python = "python3"
-    else:
-        python = "python"
-
+    requires = ['cloud-utils | cloud-guest-utils'] if cloud_util_deps else []
+    # We consolidate all deps as Build-Depends as our package build runs all
+    # tests so we need all runtime dependencies anyway.
+    # NOTE: python package was moved to the front after debuild -S would fail with
+    # 'Please add apropriate interpreter' errors (as in debian bug 861132)
+    requires.extend([python] + reqs + test_reqs)
     templater.render_to_file(util.abs_join(find_root(),
                                            'packages', 'debian', 'control.in'),
                              util.abs_join(deb_dir, 'control'),
-                             params={'requires': ','.join(requires),
-                                     'test_requires': ','.join(test_requires),
+                             params={'build_depends': ','.join(requires),
                                      'python': python})
 
     templater.render_to_file(util.abs_join(find_root(),
@@ -124,8 +113,8 @@ def read_version():
     return json.loads(run_helper('read-version', ['--json']))
 
 
-def main():
-
+def get_parser():
+    """Setup and return an argument parser for bdeb tool."""
     parser = argparse.ArgumentParser()
     parser.add_argument("-v", "--verbose", dest="verbose",
                         help=("run verbosely"
@@ -145,12 +134,11 @@ def main():
     parser.add_argument("--init-system", dest="init_system",
                         help=("build deb with INIT_SYSTEM=xxx"
                               " (default: %(default)s"),
-                        default=os.environ.get("INIT_SYSTEM",
-                                               "upstart,systemd"))
+                        default=os.environ.get("INIT_SYSTEM", "systemd"))
 
     parser.add_argument("--release", dest="release",
                         help=("build with changelog referencing RELEASE"),
-                        default="UNRELEASED")
+                        default=UNRELEASED)
 
     for ent in DEBUILD_ARGS:
         parser.add_argument(ent, dest="debuild_args", action='append_const',
@@ -162,7 +150,11 @@ def main():
 
     parser.add_argument("--signuser", default=False, action='store',
                         help="user to sign, see man dpkg-genchanges")
+    return parser
 
+
+def main():
+    parser = get_parser()
     args = parser.parse_args()
 
     if not args.sign:
@@ -177,20 +169,11 @@ def main():
     if args.verbose:
         capture = False
 
-    pkgmap = {}
-    for p in NONSTD_NAMED_PACKAGES:
-        pkgmap[p] = NONSTD_NAMED_PACKAGES[p][int(not args.python2)]
+    templ_data = {
+        'debian_release': args.release,
+        'release_suffix': get_release_suffix(args.release)}
 
-    for p in STD_NAMED_PACKAGES:
-        if args.python2:
-            pkgmap[p] = "python-" + p
-            pyver = "2"
-        else:
-            pkgmap[p] = "python3-" + p
-            pyver = "3"
-
-    templ_data = {'debian_release': args.release}
-    with util.tempdir() as tdir:
+    with temp_utils.tempdir() as tdir:
 
         # output like 0.7.6-1022-g36e92d3
         ver_data = read_version()
@@ -198,26 +181,28 @@ def main():
         # This is really only a temporary archive
         # since we will extract it then add in the debian
         # folder, then re-archive it for debian happiness
-        print("Creating a temporary tarball using the 'make-tarball' helper")
         tarball = "cloud-init_%s.orig.tar.gz" % ver_data['version_long']
         tarball_fp = util.abs_join(tdir, tarball)
-        run_helper('make-tarball', ['--long', '--output=' + tarball_fp])
+        path = None
+        for pd in ("./", "../", "../dl/"):
+            if os.path.exists(pd + tarball):
+                path = pd + tarball
+                print("Using existing tarball %s" % path)
+                shutil.copy(path, tarball_fp)
+                break
+        if path is None:
+            print("Creating a temp tarball using the 'make-tarball' helper")
+            run_helper('make-tarball', ['--long', '--output=' + tarball_fp])
 
         print("Extracting temporary tarball %r" % (tarball))
         cmd = ['tar', '-xvzf', tarball_fp, '-C', tdir]
         util.subp(cmd, capture=capture)
 
         xdir = util.abs_join(tdir, "cloud-init-%s" % ver_data['version_long'])
-
-        print("Creating a debian/ folder in %r" % (xdir))
-        if args.cloud_utils:
-            append_requires = ['cloud-utils | cloud-guest-utils']
-        else:
-            append_requires = []
-
         templ_data.update(ver_data)
-        write_debian_folder(xdir, templ_data, pkgmap,
-                            pyver=pyver, append_requires=append_requires)
+
+        write_debian_folder(xdir, templ_data, is_python2=args.python2,
+                            cloud_util_deps=args.cloud_utils)
 
         print("Running 'debuild %s' in %r" % (' '.join(args.debuild_args),
                                               xdir))

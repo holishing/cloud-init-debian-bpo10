@@ -55,7 +55,7 @@ LOG = logging.getLogger(__name__)
 
 frequency = PER_INSTANCE
 
-distros = ['fedora', 'rhel', 'sles']
+distros = ['fedora', 'opensuse', 'rhel', 'sles']
 
 
 def generate_resolv_conf(template_fn, params, target_fname="/etc/resolv.conf"):
@@ -77,7 +77,7 @@ def generate_resolv_conf(template_fn, params, target_fname="/etc/resolv.conf"):
         params['options'] = {}
 
     params['flags'] = flags
-    LOG.debug("Writing resolv.conf from template %s" % template_fn)
+    LOG.debug("Writing resolv.conf from template %s", template_fn)
     templater.render_to_file(template_fn, target_fname, params)
 
 

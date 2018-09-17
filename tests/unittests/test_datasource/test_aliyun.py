@@ -2,11 +2,12 @@
 
 import functools
 import httpretty
+import mock
 import os
 
-from .. import helpers as test_helpers
 from cloudinit import helpers
 from cloudinit.sources import DataSourceAliYun as ay
+from cloudinit.tests import helpers as test_helpers
 
 DEFAULT_METADATA = {
     'instance-id': 'aliyun-test-vm-00',
@@ -46,6 +47,9 @@ def register_mock_metaserver(base_url, data):
         elif isinstance(body, list):
             register(base_url.rstrip('/'), '\n'.join(body) + '\n')
         elif isinstance(body, dict):
+            if not body:
+                register(base_url.rstrip('/') + '/', 'not found',
+                         status_code=404)
             vals = []
             for k, v in body.items():
                 if isinstance(v, (str, list)):
@@ -66,10 +70,9 @@ class TestAliYunDatasource(test_helpers.HttprettyTestCase):
         super(TestAliYunDatasource, self).setUp()
         cfg = {'datasource': {'AliYun': {'timeout': '1', 'max_wait': '1'}}}
         distro = {}
-        paths = helpers.Paths({})
+        paths = helpers.Paths({'run_dir': self.tmp_dir()})
         self.ds = ay.DataSourceAliYun(cfg, distro, paths)
         self.metadata_address = self.ds.metadata_urls[0]
-        self.api_ver = self.ds.api_ver
 
     @property
     def default_metadata(self):
@@ -81,17 +84,32 @@ class TestAliYunDatasource(test_helpers.HttprettyTestCase):
 
     @property
     def metadata_url(self):
-        return os.path.join(self.metadata_address,
-                            self.api_ver, 'meta-data') + '/'
+        return os.path.join(
+            self.metadata_address,
+            self.ds.min_metadata_version, 'meta-data') + '/'
 
     @property
     def userdata_url(self):
+        return os.path.join(
+            self.metadata_address,
+            self.ds.min_metadata_version, 'user-data')
+
+    # EC2 provides an instance-identity document which must return 404 here
+    # for this test to pass.
+    @property
+    def default_identity(self):
+        return {}
+
+    @property
+    def identity_url(self):
         return os.path.join(self.metadata_address,
-                            self.api_ver, 'user-data')
+                            self.ds.min_metadata_version,
+                            'dynamic', 'instance-identity')
 
     def regist_default_server(self):
         register_mock_metaserver(self.metadata_url, self.default_metadata)
         register_mock_metaserver(self.userdata_url, self.default_userdata)
+        register_mock_metaserver(self.identity_url, self.default_identity)
 
     def _test_get_data(self):
         self.assertEqual(self.ds.metadata, self.default_metadata)
@@ -111,14 +129,26 @@ class TestAliYunDatasource(test_helpers.HttprettyTestCase):
         self.assertEqual(self.default_metadata['hostname'],
                          self.ds.get_hostname())
 
-    @httpretty.activate
-    def test_with_mock_server(self):
+    @mock.patch("cloudinit.sources.DataSourceAliYun._is_aliyun")
+    def test_with_mock_server(self, m_is_aliyun):
+        m_is_aliyun.return_value = True
         self.regist_default_server()
-        self.ds.get_data()
+        ret = self.ds.get_data()
+        self.assertEqual(True, ret)
+        self.assertEqual(1, m_is_aliyun.call_count)
         self._test_get_data()
         self._test_get_sshkey()
         self._test_get_iid()
         self._test_host_name()
+
+    @mock.patch("cloudinit.sources.DataSourceAliYun._is_aliyun")
+    def test_returns_false_when_not_on_aliyun(self, m_is_aliyun):
+        """If is_aliyun returns false, then get_data should return False."""
+        m_is_aliyun.return_value = False
+        self.regist_default_server()
+        ret = self.ds.get_data()
+        self.assertEqual(1, m_is_aliyun.call_count)
+        self.assertEqual(False, ret)
 
     def test_parse_public_keys(self):
         public_keys = {}
@@ -148,5 +178,37 @@ class TestAliYunDatasource(test_helpers.HttprettyTestCase):
                                                       'ssh-key-1']}}
         self.assertEqual(ay.parse_public_keys(public_keys),
                          public_keys['key-pair-0']['openssh-key'])
+
+
+class TestIsAliYun(test_helpers.CiTestCase):
+    ALIYUN_PRODUCT = 'Alibaba Cloud ECS'
+    read_dmi_data_expected = [mock.call('system-product-name')]
+
+    @mock.patch("cloudinit.sources.DataSourceAliYun.util.read_dmi_data")
+    def test_true_on_aliyun_product(self, m_read_dmi_data):
+        """Should return true if the dmi product data has expected value."""
+        m_read_dmi_data.return_value = self.ALIYUN_PRODUCT
+        ret = ay._is_aliyun()
+        self.assertEqual(self.read_dmi_data_expected,
+                         m_read_dmi_data.call_args_list)
+        self.assertEqual(True, ret)
+
+    @mock.patch("cloudinit.sources.DataSourceAliYun.util.read_dmi_data")
+    def test_false_on_empty_string(self, m_read_dmi_data):
+        """Should return false on empty value returned."""
+        m_read_dmi_data.return_value = ""
+        ret = ay._is_aliyun()
+        self.assertEqual(self.read_dmi_data_expected,
+                         m_read_dmi_data.call_args_list)
+        self.assertEqual(False, ret)
+
+    @mock.patch("cloudinit.sources.DataSourceAliYun.util.read_dmi_data")
+    def test_false_on_unknown_string(self, m_read_dmi_data):
+        """Should return false on an unrelated string."""
+        m_read_dmi_data.return_value = "cubs win"
+        ret = ay._is_aliyun()
+        self.assertEqual(self.read_dmi_data_expected,
+                         m_read_dmi_data.call_args_list)
+        self.assertEqual(False, ret)
 
 # vi: ts=4 expandtab

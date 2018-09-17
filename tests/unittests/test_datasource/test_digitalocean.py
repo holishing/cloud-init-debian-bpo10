@@ -1,6 +1,8 @@
 # Copyright (C) 2014 Neal Shrader
 #
 # Author: Neal Shrader <neal@digitalocean.com>
+# Author: Ben Howard <bh@digitalocean.com>
+# Author: Scott Moser <smoser@ubuntu.com>
 #
 # This file is part of cloud-init. See LICENSE file for license information.
 
@@ -11,7 +13,7 @@ from cloudinit import settings
 from cloudinit.sources import DataSourceDigitalOcean
 from cloudinit.sources.helpers import digitalocean
 
-from ..helpers import mock, TestCase
+from cloudinit.tests.helpers import mock, CiTestCase
 
 DO_MULTIPLE_KEYS = ["ssh-rsa AAAAB3NzaC1yc2EAAAA... test1@do.co",
                     "ssh-rsa AAAAB3NzaC1yc2EAAAA... test2@do.co"]
@@ -133,14 +135,17 @@ def _mock_dmi():
     return (True, DO_META.get('id'))
 
 
-class TestDataSourceDigitalOcean(TestCase):
+class TestDataSourceDigitalOcean(CiTestCase):
     """
     Test reading the meta-data
     """
+    def setUp(self):
+        super(TestDataSourceDigitalOcean, self).setUp()
+        self.tmp = self.tmp_dir()
 
     def get_ds(self, get_sysinfo=_mock_dmi):
         ds = DataSourceDigitalOcean.DataSourceDigitalOcean(
-            settings.CFG_BUILTIN, None, helpers.Paths({}))
+            settings.CFG_BUILTIN, None, helpers.Paths({'run_dir': self.tmp}))
         ds.use_ip4LL = False
         if get_sysinfo is not None:
             ds._get_sysinfo = get_sysinfo
@@ -192,29 +197,53 @@ class TestDataSourceDigitalOcean(TestCase):
         self.assertIsInstance(ds.get_public_ssh_keys(), list)
 
 
-class TestNetworkConvert(TestCase):
+class TestNetworkConvert(CiTestCase):
 
     def _get_networking(self):
+        self.m_get_by_mac.return_value = {
+            '04:01:57:d1:9e:01': 'ens1',
+            '04:01:57:d1:9e:02': 'ens2',
+            'b8:ae:ed:75:5f:9a': 'enp0s25',
+            'ae:cc:08:7c:88:00': 'meta2p1'}
         netcfg = digitalocean.convert_network_configuration(
             DO_META['interfaces'], DO_META['dns']['nameservers'])
         self.assertIn('config', netcfg)
         return netcfg
 
+    def setUp(self):
+        super(TestNetworkConvert, self).setUp()
+        self.add_patch('cloudinit.net.get_interfaces_by_mac', 'm_get_by_mac')
+
     def test_networking_defined(self):
         netcfg = self._get_networking()
         self.assertIsNotNone(netcfg)
+        dns_defined = False
 
-        for nic_def in netcfg.get('config'):
-            print(json.dumps(nic_def, indent=3))
-            n_type = nic_def.get('type')
-            n_subnets = nic_def.get('type')
-            n_name = nic_def.get('name')
-            n_mac = nic_def.get('mac_address')
+        for part in netcfg.get('config'):
+            n_type = part.get('type')
+            print("testing part ", n_type, "\n", json.dumps(part, indent=3))
 
-            self.assertIsNotNone(n_type)
-            self.assertIsNotNone(n_subnets)
-            self.assertIsNotNone(n_name)
-            self.assertIsNotNone(n_mac)
+            if n_type == 'nameserver':
+                n_address = part.get('address')
+                self.assertIsNotNone(n_address)
+                self.assertEqual(len(n_address), 3)
+
+                dns_resolvers = DO_META["dns"]["nameservers"]
+                for x in n_address:
+                    self.assertIn(x, dns_resolvers)
+                dns_defined = True
+
+            else:
+                n_subnets = part.get('type')
+                n_name = part.get('name')
+                n_mac = part.get('mac_address')
+
+                self.assertIsNotNone(n_type)
+                self.assertIsNotNone(n_subnets)
+                self.assertIsNotNone(n_name)
+                self.assertIsNotNone(n_mac)
+
+        self.assertTrue(dns_defined)
 
     def _get_nic_definition(self, int_type, expected_name):
         """helper function to return if_type (i.e. public) and the expected
@@ -241,6 +270,29 @@ class TestNetworkConvert(TestCase):
                 print(json.dumps(subn, indent=3))
                 return subn
 
+    def test_correct_gateways_defined(self):
+        """test to make sure the eth0 ipv4 and ipv6 gateways are defined"""
+        netcfg = self._get_networking()
+        gateways = []
+        for nic_def in netcfg.get('config'):
+            if nic_def.get('type') != 'physical':
+                continue
+            for subn in nic_def.get('subnets'):
+                if 'gateway' in subn:
+                    gateways.append(subn.get('gateway'))
+
+        # we should have two gateways, one ipv4 and ipv6
+        self.assertEqual(len(gateways), 2)
+
+        # make that the ipv6 gateway is there
+        (nic_def, meta_def) = self._get_nic_definition('public', 'eth0')
+        ipv4_def = meta_def.get('ipv4')
+        self.assertIn(ipv4_def.get('gateway'), gateways)
+
+        # make sure the the ipv6 gateway is there
+        ipv6_def = meta_def.get('ipv6')
+        self.assertIn(ipv6_def.get('gateway'), gateways)
+
     def test_public_interface_defined(self):
         """test that the public interface is defined as eth0"""
         (nic_def, meta_def) = self._get_nic_definition('public', 'eth0')
@@ -254,12 +306,6 @@ class TestNetworkConvert(TestCase):
         self.assertEqual('eth1', nic_def.get('name'))
         self.assertEqual(meta_def.get('mac'), nic_def.get('mac_address'))
         self.assertEqual('physical', nic_def.get('type'))
-
-    def _check_dns_nameservers(self, subn_def):
-        self.assertIn('dns_nameservers', subn_def)
-        expected_nameservers = DO_META['dns']['nameservers']
-        nic_nameservers = subn_def.get('dns_nameservers')
-        self.assertEqual(expected_nameservers, nic_nameservers)
 
     def test_public_interface_ipv6(self):
         """test public ipv6 addressing"""
@@ -275,7 +321,6 @@ class TestNetworkConvert(TestCase):
 
         self.assertEqual(cidr_notated_address, subn_def.get('address'))
         self.assertEqual(ipv6_def.get('gateway'), subn_def.get('gateway'))
-        self._check_dns_nameservers(subn_def)
 
     def test_public_interface_ipv4(self):
         """test public ipv4 addressing"""
@@ -288,7 +333,6 @@ class TestNetworkConvert(TestCase):
 
         self.assertEqual(ipv4_def.get('netmask'), subn_def.get('netmask'))
         self.assertEqual(ipv4_def.get('gateway'), subn_def.get('gateway'))
-        self._check_dns_nameservers(subn_def)
 
     def test_public_interface_anchor_ipv4(self):
         """test public ipv4 addressing"""
@@ -302,10 +346,15 @@ class TestNetworkConvert(TestCase):
         self.assertEqual(ipv4_def.get('netmask'), subn_def.get('netmask'))
         self.assertNotIn('gateway', subn_def)
 
-    def test_convert_without_private(self):
+    @mock.patch('cloudinit.net.get_interfaces_by_mac')
+    def test_convert_without_private(self, m_get_by_mac):
+        m_get_by_mac.return_value = {
+            'b8:ae:ed:75:5f:9a': 'enp0s25',
+            'ae:cc:08:7c:88:00': 'meta2p1'}
         netcfg = digitalocean.convert_network_configuration(
             DO_META_2['interfaces'], DO_META_2['dns']['nameservers'])
 
+        # print(netcfg)
         byname = {}
         for i in netcfg['config']:
             if 'name' in i:

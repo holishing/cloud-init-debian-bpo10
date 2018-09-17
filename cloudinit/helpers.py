@@ -13,7 +13,7 @@ from time import time
 import contextlib
 import os
 
-import six
+from six import StringIO
 from six.moves.configparser import (
     NoSectionError, NoOptionError, RawConfigParser)
 
@@ -126,11 +126,11 @@ class FileSemaphores(object):
         # this case could happen if the migrator module hadn't run yet
         # but the item had run before we did canon_sem_name.
         if cname != name and os.path.exists(self._get_path(name, freq)):
-            LOG.warn("%s has run without canonicalized name [%s].\n"
-                     "likely the migrator has not yet run. "
-                     "It will run next boot.\n"
-                     "run manually with: cloud-init single --name=migrator"
-                     % (name, cname))
+            LOG.warning("%s has run without canonicalized name [%s].\n"
+                        "likely the migrator has not yet run. "
+                        "It will run next boot.\n"
+                        "run manually with: cloud-init single --name=migrator",
+                        name, cname)
             return True
 
         return False
@@ -339,6 +339,8 @@ class Paths(object):
             "vendordata_raw": "vendor-data.txt",
             "vendordata": "vendor-data.txt.i",
             "instance_id": ".instance-id",
+            "manual_clean_marker": "manual-clean",
+            "warnings": "warnings",
         }
         # Set when a datasource becomes active
         self.datasource = ds
@@ -373,8 +375,8 @@ class Paths(object):
     def get_ipath(self, name=None):
         ipath = self._get_ipath(name)
         if not ipath:
-            LOG.warn(("No per instance data available, "
-                      "is there an datasource/iid set?"))
+            LOG.warning(("No per instance data available, "
+                         "is there an datasource/iid set?"))
             return None
         else:
             return ipath
@@ -439,12 +441,12 @@ class DefaultingConfigParser(RawConfigParser):
 
     def stringify(self, header=None):
         contents = ''
-        with six.StringIO() as outputstream:
-            self.write(outputstream)
-            outputstream.flush()
-            contents = outputstream.getvalue()
-            if header:
-                contents = "\n".join([header, contents])
+        outputstream = StringIO()
+        self.write(outputstream)
+        outputstream.flush()
+        contents = outputstream.getvalue()
+        if header:
+            contents = '\n'.join([header, contents, ''])
         return contents
 
 # vi: ts=4 expandtab

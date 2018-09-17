@@ -1,3 +1,5 @@
+.. _datasource_nocloud:
+
 NoCloud
 =======
 
@@ -8,6 +10,38 @@ network at all).
 You can provide meta-data and user-data to a local vm boot via files on a
 `vfat`_ or `iso9660`_ filesystem. The filesystem volume label must be
 ``cidata``.
+
+Alternatively, you can provide meta-data via kernel command line or SMBIOS
+"serial number" option. The data must be passed in the form of a string:
+
+::
+
+  ds=nocloud[;key=val;key=val]
+
+or
+
+::
+
+  ds=nocloud-net[;key=val;key=val]
+
+The permitted keys are:
+
+- ``h`` or ``local-hostname``
+- ``i`` or ``instance-id``
+- ``s`` or ``seedfrom``
+
+With ``ds=nocloud``, the ``seedfrom`` value must start with ``/`` or
+``file://``.  With ``ds=nocloud-net``, the ``seedfrom`` value must start
+with ``http://``, ``https://`` or ``ftp://``
+
+e.g. you can pass this option to QEMU:
+
+::
+
+  -smbios type=1,serial=ds=nocloud-net;s=http://10.10.0.1:8000/
+
+to cause NoCloud to fetch the full meta-data from http://10.10.0.1:8000/meta-data
+after the network initialization is complete.
 
 These user-data and meta-data files are expected to be in the following format.
 
@@ -69,6 +103,43 @@ Example metadata:
       broadcast 192.168.1.255
       gateway 192.168.1.254
     hostname: myhost
+
+
+Network configuration can also be provided to cloud-init in either
+:ref:`network_config_v1` or :ref:`network_config_v2` by providing that
+yaml formatted data in a file named ``network-config``.  If found,
+this file will override a ``network-interfaces`` file.
+
+See an example below.  Note specifically that this file does not
+have a top level ``network`` key as it it is already assumed to
+be network configuration based on the filename.
+
+.. code:: yaml
+
+  version: 1
+  config:
+     - type: physical
+       name: interface0
+       mac_address: "52:54:00:12:34:00"
+       subnets:
+          - type: static
+            address: 192.168.1.10
+            netmask: 255.255.255.0
+            gateway: 192.168.1.254
+
+
+.. code:: yaml
+
+  version: 2
+  ethernets:
+    interface0:
+       match:
+           mac_address: "52:54:00:12:34:00"
+       set-name: interface0
+       addresses:
+       - 192.168.1.10/255.255.255.0
+       gateway4: 192.168.1.254
+
 
 .. _iso9660: https://en.wikipedia.org/wiki/ISO_9660
 .. _vfat: https://en.wikipedia.org/wiki/File_Allocation_Table

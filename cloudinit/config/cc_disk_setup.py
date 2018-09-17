@@ -68,6 +68,9 @@ specified using ``filesystem``.
     Using ``overwrite: true`` for filesystems is dangerous and can lead to data
     loss, so double check the entry in ``fs_setup``.
 
+.. note::
+    ``replace_fs`` is ignored unless ``partition`` is ``auto`` or ``any``.
+
 **Internal name:** ``cc_disk_setup``
 
 **Module frequency:** per instance
@@ -127,7 +130,7 @@ def handle(_name, cfg, cloud, log, _args):
         log.debug("Partitioning disks: %s", str(disk_setup))
         for disk, definition in disk_setup.items():
             if not isinstance(definition, dict):
-                log.warn("Invalid disk definition for %s" % disk)
+                log.warning("Invalid disk definition for %s" % disk)
                 continue
 
             try:
@@ -144,7 +147,7 @@ def handle(_name, cfg, cloud, log, _args):
         update_fs_setup_devices(fs_setup, cloud.device_name_to_device)
         for definition in fs_setup:
             if not isinstance(definition, dict):
-                log.warn("Invalid file system definition: %s" % definition)
+                log.warning("Invalid file system definition: %s" % definition)
                 continue
 
             try:
@@ -181,7 +184,7 @@ def update_fs_setup_devices(disk_setup, tformer):
     # update it with the response from 'tformer'
     for definition in disk_setup:
         if not isinstance(definition, dict):
-            LOG.warn("entry in disk_setup not a dict: %s", definition)
+            LOG.warning("entry in disk_setup not a dict: %s", definition)
             continue
 
         origname = definition.get('device')
@@ -199,9 +202,14 @@ def update_fs_setup_devices(disk_setup, tformer):
             definition['_origname'] = origname
             definition['device'] = tformed
 
-        if part and 'partition' in definition:
-            definition['_partition'] = definition['partition']
-        definition['partition'] = part
+        if part:
+            # In origname with <dev>.N, N overrides 'partition' key.
+            if 'partition' in definition:
+                LOG.warning("Partition '%s' from dotted device name '%s' "
+                            "overrides 'partition' key in %s", part, origname,
+                            definition)
+                definition['_partition'] = definition['partition']
+            definition['partition'] = part
 
 
 def value_splitter(values, start=None):
@@ -279,7 +287,7 @@ def is_device_valid(name, partition=False):
     try:
         d_type = device_type(name)
     except Exception:
-        LOG.warn("Query against device %s failed" % name)
+        LOG.warning("Query against device %s failed", name)
         return False
 
     if partition and d_type == 'part':
@@ -372,7 +380,7 @@ def find_device_node(device, fs_type=None, label=None, valid_targets=None,
     if not raw_device_used:
         return (device, False)
 
-    LOG.warn("Failed to find device during available device search.")
+    LOG.warning("Failed to find device during available device search.")
     return (None, False)
 
 
@@ -423,7 +431,7 @@ def get_dyn_func(*args):
         raise Exception("No such function %s to call!" % func_name)
 
 
-def get_mbr_hdd_size(device):
+def get_hdd_size(device):
     try:
         size_in_bytes, _ = util.subp([BLKDEV_CMD, '--getsize64', device])
         sector_size, _ = util.subp([BLKDEV_CMD, '--getss', device])
@@ -431,22 +439,6 @@ def get_mbr_hdd_size(device):
         raise Exception("Failed to get %s size\n%s" % (device, e))
 
     return int(size_in_bytes) / int(sector_size)
-
-
-def get_gpt_hdd_size(device):
-    out, _ = util.subp([SGDISK_CMD, '-p', device], update_env=LANG_C_ENV)
-    for line in out.splitlines():
-        if line.startswith("Disk"):
-            return line.split()[2]
-    raise Exception("Failed to get %s size from sgdisk" % (device))
-
-
-def get_hdd_size(table_type, device):
-    """
-    Returns the hard disk size.
-    This works with any disk type, including GPT.
-    """
-    return get_dyn_func("get_%s_hdd_size", table_type, device)
 
 
 def check_partition_mbr_layout(device, layout):
@@ -496,12 +488,35 @@ def check_partition_gpt_layout(device, layout):
                         device, e))
 
     out_lines = iter(out.splitlines())
-    # Skip header
+    # Skip header.  Output looks like:
+    # ***************************************************************
+    # Found invalid GPT and valid MBR; converting MBR to GPT format
+    # in memory.
+    # ***************************************************************
+    #
+    # Disk /dev/vdb: 83886080 sectors, 40.0 GiB
+    # Logical sector size: 512 bytes
+    # Disk identifier (GUID): 8A7F11AD-3953-491B-8051-077E01C8E9A7
+    # Partition table holds up to 128 entries
+    # First usable sector is 34, last usable sector is 83886046
+    # Partitions will be aligned on 2048-sector boundaries
+    # Total free space is 83476413 sectors (39.8 GiB)
+    #
+    # Number Start (sector) End (sector) Size       Code  Name
+    # 1      2048           206847       100.0 MiB  0700  Microsoft basic data
     for line in out_lines:
         if line.strip().startswith('Number'):
             break
 
-    return [line.strip().split()[-1] for line in out_lines]
+    codes = [line.strip().split()[5] for line in out_lines]
+    cleaned = []
+
+    # user would expect a code '83' to be Linux, but sgdisk outputs 8300.
+    for code in codes:
+        if len(code) == 4 and code.endswith("00"):
+            code = code[0:2]
+        cleaned.append(code)
+    return cleaned
 
 
 def check_partition_layout(table_type, device, layout):
@@ -515,6 +530,8 @@ def check_partition_layout(table_type, device, layout):
     found_layout = get_dyn_func(
         "check_partition_%s_layout", table_type, device, layout)
 
+    LOG.debug("called check_partition_%s_layout(%s, %s), returned: %s",
+              table_type, device, layout, found_layout)
     if isinstance(layout, bool):
         # if we are using auto partitioning, or "True" be happy
         # if a single partition exists.
@@ -522,18 +539,17 @@ def check_partition_layout(table_type, device, layout):
             return True
         return False
 
-    else:
-        if len(found_layout) != len(layout):
-            return False
-        else:
-            # This just makes sure that the number of requested
-            # partitions and the type labels are right
-            for x in range(1, len(layout) + 1):
-                if isinstance(layout[x - 1], tuple):
-                    _, part_type = layout[x]
-                    if int(found_layout[x]) != int(part_type):
-                        return False
-            return True
+    elif len(found_layout) == len(layout):
+        # This just makes sure that the number of requested
+        # partitions and the type labels are right
+        layout_types = [str(x[1]) if isinstance(x, (tuple, list)) else None
+                        for x in layout]
+        LOG.debug("Layout types=%s. Found types=%s",
+                  layout_types, found_layout)
+        for itype, ftype in zip(layout_types, found_layout):
+            if itype is not None and str(ftype) != str(itype):
+                return False
+        return True
 
     return False
 
@@ -638,7 +654,7 @@ def purge_disk(device):
         if d['type'] not in ["disk", "crypt"]:
             wipefs_cmd = [WIPEFS_CMD, "--all", "/dev/%s" % d['name']]
             try:
-                LOG.info("Purging filesystem on /dev/%s" % d['name'])
+                LOG.info("Purging filesystem on /dev/%s", d['name'])
                 util.subp(wipefs_cmd)
             except Exception:
                 raise Exception("Failed FS purge of /dev/%s" % d['name'])
@@ -664,13 +680,13 @@ def read_parttbl(device):
     reliable way to probe the partition table.
     """
     blkdev_cmd = [BLKDEV_CMD, '--rereadpt', device]
-    udev_cmd = [UDEVADM_CMD, 'settle']
+    util.udevadm_settle()
     try:
-        util.subp(udev_cmd)
         util.subp(blkdev_cmd)
-        util.subp(udev_cmd)
     except Exception as e:
         util.logexc(LOG, "Failed reading the partition table %s" % e)
+
+    util.udevadm_settle()
 
 
 def exec_mkpart_mbr(device, layout):
@@ -696,11 +712,13 @@ def exec_mkpart_gpt(device, layout):
             util.subp([SGDISK_CMD,
                        '-n', '{}:{}:{}'.format(index, start, end), device])
             if partition_type is not None:
+                # convert to a 4 char (or more) string right padded with 0
+                # 82 -> 8200.  'Linux' -> 'Linux'
+                pinput = str(partition_type).ljust(4, "0")
                 util.subp(
-                    [SGDISK_CMD,
-                     '-t', '{}:{}'.format(index, partition_type), device])
+                    [SGDISK_CMD, '-t', '{}:{}'.format(index, pinput), device])
     except Exception:
-        LOG.warn("Failed to partition device %s" % device)
+        LOG.warning("Failed to partition device %s", device)
         raise
 
     read_parttbl(device)
@@ -719,6 +737,20 @@ def exec_mkpart(table_type, device, layout):
     return get_dyn_func("exec_mkpart_%s", table_type, device, layout)
 
 
+def assert_and_settle_device(device):
+    """Assert that device exists and settle so it is fully recognized."""
+    if not os.path.exists(device):
+        util.udevadm_settle()
+        if not os.path.exists(device):
+            raise RuntimeError("Device %s did not exist and was not created "
+                               "with a udevamd settle." % device)
+
+    # Whether or not the device existed above, it is possible that udev
+    # events that would populate udev database (for reading by lsdname) have
+    # not yet finished. So settle again.
+    util.udevadm_settle()
+
+
 def mkpart(device, definition):
     """
     Creates the partition table.
@@ -734,9 +766,10 @@ def mkpart(device, definition):
                 device: the device to work on.
     """
     # ensure that we get a real device rather than a symbolic link
+    assert_and_settle_device(device)
     device = os.path.realpath(device)
 
-    LOG.debug("Checking values for %s definition" % device)
+    LOG.debug("Checking values for %s definition", device)
     overwrite = definition.get('overwrite', False)
     layout = definition.get('layout', False)
     table_type = definition.get('table_type', 'mbr')
@@ -751,7 +784,8 @@ def mkpart(device, definition):
     # This prevents you from overwriting the device
     LOG.debug("Checking if device %s is a valid device", device)
     if not is_device_valid(device):
-        raise Exception("Device %s is not a disk device!", device)
+        raise Exception(
+            'Device {device} is not a disk device!'.format(device=device))
 
     # Remove the partition table entries
     if isinstance(layout, str) and layout.lower() == "remove":
@@ -766,15 +800,15 @@ def mkpart(device, definition):
 
     LOG.debug("Checking if device is safe to partition")
     if not overwrite and (is_disk_used(device) or is_filesystem(device)):
-        LOG.debug("Skipping partitioning on configured device %s" % device)
+        LOG.debug("Skipping partitioning on configured device %s", device)
         return
 
-    LOG.debug("Checking for device size")
-    device_size = get_hdd_size(table_type, device)
+    LOG.debug("Checking for device size of %s", device)
+    device_size = get_hdd_size(device)
 
     LOG.debug("Calculating partition layout")
     part_definition = get_partition_layout(table_type, device_size, layout)
-    LOG.debug("   Layout is: %s" % part_definition)
+    LOG.debug("   Layout is: %s", part_definition)
 
     LOG.debug("Creating partition table on %s", device)
     exec_mkpart(table_type, device, part_definition)
@@ -799,7 +833,7 @@ def lookup_force_flag(fs):
     if fs.lower() in flags:
         return flags[fs]
 
-    LOG.warn("Force flag for %s is unknown." % fs)
+    LOG.warning("Force flag for %s is unknown.", fs)
     return ''
 
 
@@ -834,6 +868,7 @@ def mkfs(fs_cfg):
     overwrite = fs_cfg.get('overwrite', False)
 
     # ensure that we get a real device rather than a symbolic link
+    assert_and_settle_device(device)
     device = os.path.realpath(device)
 
     # This allows you to define the default ephemeral or swap
@@ -849,7 +884,8 @@ def mkfs(fs_cfg):
         # Check to see if the fs already exists
         LOG.debug("Checking device %s", device)
         check_label, check_fstype, _ = check_fs(device)
-        LOG.debug("Device %s has %s %s", device, check_label, check_fstype)
+        LOG.debug("Device '%s' has check_label='%s' check_fstype=%s",
+                  device, check_label, check_fstype)
 
         if check_label == label and check_fstype == fs_type:
             LOG.debug("Existing file system found at %s", device)
@@ -858,7 +894,7 @@ def mkfs(fs_cfg):
                 LOG.debug("Device %s has required file system", device)
                 return
             else:
-                LOG.warn("Destroying filesystem on %s", device)
+                LOG.warning("Destroying filesystem on %s", device)
 
         else:
             LOG.debug("Device %s is cleared for formating", device)
@@ -883,14 +919,14 @@ def mkfs(fs_cfg):
             return
 
         if not reuse and fs_replace and device:
-            LOG.debug("Replacing file system on %s as instructed." % device)
+            LOG.debug("Replacing file system on %s as instructed.", device)
 
         if not device:
             LOG.debug("No device aviable that matches request. "
                       "Skipping fs creation for %s", fs_cfg)
             return
     elif not partition or str(partition).lower() == 'none':
-        LOG.debug("Using the raw device to place filesystem %s on" % label)
+        LOG.debug("Using the raw device to place filesystem %s on", label)
 
     else:
         LOG.debug("Error in device identification handling.")
@@ -901,21 +937,33 @@ def mkfs(fs_cfg):
 
     # Make sure the device is defined
     if not device:
-        LOG.warn("Device is not known: %s", device)
+        LOG.warning("Device is not known: %s", device)
         return
 
     # Check that we can create the FS
     if not (fs_type or fs_cmd):
-        raise Exception("No way to create filesystem '%s'. fs_type or fs_cmd "
-                        "must be set.", label)
+        raise Exception(
+            "No way to create filesystem '{label}'. fs_type or fs_cmd "
+            "must be set.".format(label=label))
 
     # Create the commands
+    shell = False
     if fs_cmd:
         fs_cmd = fs_cfg['cmd'] % {
             'label': label,
             'filesystem': fs_type,
             'device': device,
         }
+        shell = True
+
+        if overwrite:
+            LOG.warning(
+                "fs_setup:overwrite ignored because cmd was specified: %s",
+                fs_cmd)
+        if fs_opts:
+            LOG.warning(
+                "fs_setup:extra_opts ignored because cmd was specified: %s",
+                fs_cmd)
     else:
         # Find the mkfs command
         mkfs_cmd = util.which("mkfs.%s" % fs_type)
@@ -923,8 +971,8 @@ def mkfs(fs_cfg):
             mkfs_cmd = util.which("mk%s" % fs_type)
 
         if not mkfs_cmd:
-            LOG.warn("Cannot create fstype '%s'.  No mkfs.%s command", fs_type,
-                     fs_type)
+            LOG.warning("Cannot create fstype '%s'.  No mkfs.%s command",
+                        fs_type, fs_type)
             return
 
         fs_cmd = [mkfs_cmd, device]
@@ -936,14 +984,14 @@ def mkfs(fs_cfg):
         if overwrite or device_type(device) == "disk":
             fs_cmd.append(lookup_force_flag(fs_type))
 
-    # Add the extends FS options
-    if fs_opts:
-        fs_cmd.extend(fs_opts)
+        # Add the extends FS options
+        if fs_opts:
+            fs_cmd.extend(fs_opts)
 
     LOG.debug("Creating file system %s on %s", label, device)
-    LOG.debug("     Using cmd: %s", " ".join(fs_cmd))
+    LOG.debug("     Using cmd: %s", str(fs_cmd))
     try:
-        util.subp(fs_cmd)
+        util.subp(fs_cmd, shell=shell)
     except Exception as e:
         raise Exception("Failed to exec of '%s':\n%s" % (fs_cmd, e))
 

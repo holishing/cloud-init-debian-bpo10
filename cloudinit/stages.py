@@ -11,7 +11,8 @@ import sys
 import six
 from six.moves import cPickle as pickle
 
-from cloudinit.settings import (PER_INSTANCE, FREQUENCIES, CLOUD_CONFIG)
+from cloudinit.settings import (
+    FREQUENCIES, CLOUD_CONFIG, PER_INSTANCE, RUN_CLOUD_CONFIG)
 
 from cloudinit import handlers
 
@@ -131,8 +132,7 @@ class Init(object):
         return initial_dirs
 
     def purge_cache(self, rm_instance_lnk=False):
-        rm_list = []
-        rm_list.append(self.paths.boot_finished)
+        rm_list = [self.paths.boot_finished]
         if rm_instance_lnk:
             rm_list.append(self.paths.instance_link)
         for f in rm_list:
@@ -162,8 +162,8 @@ class Init(object):
                 except OSError as e:
                     error = e
 
-            LOG.warn("Failed changing perms on '%s'. tried: %s. %s",
-                     log_file, ','.join(perms), error)
+            LOG.warning("Failed changing perms on '%s'. tried: %s. %s",
+                        log_file, ','.join(perms), error)
 
     def read_cfg(self, extra_fns=None):
         # None check so that we don't keep on re-loading if empty
@@ -188,6 +188,12 @@ class Init(object):
     def _write_to_cache(self):
         if self.datasource is NULL_DATA_SOURCE:
             return False
+        if util.get_cfg_option_bool(self.cfg, 'manual_cache_clean', False):
+            # The empty file in instance/ dir indicates manual cleaning,
+            # and can be read by ds-identify.
+            util.write_file(
+                self.paths.get_ipath_cur("manual_clean_marker"),
+                omode="w", content="")
         return _pkl_store(self.datasource, self.paths.get_ipath_cur("obj_pkl"))
 
     def _get_datasources(self):
@@ -355,12 +361,23 @@ class Init(object):
         self._store_userdata()
         self._store_vendordata()
 
+    def setup_datasource(self):
+        with events.ReportEventStack("setup-datasource",
+                                     "setting up datasource",
+                                     parent=self.reporter):
+            if self.datasource is None:
+                raise RuntimeError("Datasource is None, cannot setup.")
+            self.datasource.setup(is_new_instance=self.is_new_instance())
+
     def activate_datasource(self):
-        if self.datasource is None:
-            raise RuntimeError("Datasource is None, cannot activate.")
-        self.datasource.activate(cfg=self.cfg,
-                                 is_new_instance=self.is_new_instance())
-        self._write_to_cache()
+        with events.ReportEventStack("activate-datasource",
+                                     "activating datasource",
+                                     parent=self.reporter):
+            if self.datasource is None:
+                raise RuntimeError("Datasource is None, cannot activate.")
+            self.datasource.activate(cfg=self.cfg,
+                                     is_new_instance=self.is_new_instance())
+            self._write_to_cache()
 
     def _store_userdata(self):
         raw_ud = self.datasource.get_userdata_raw()
@@ -440,9 +457,9 @@ class Init(object):
                     mod_locs, looked_locs = importer.find_module(
                         mod_name, [''], ['list_types', 'handle_part'])
                     if not mod_locs:
-                        LOG.warn("Could not find a valid user-data handler"
-                                 " named %s in file %s (searched %s)",
-                                 mod_name, fname, looked_locs)
+                        LOG.warning("Could not find a valid user-data handler"
+                                    " named %s in file %s (searched %s)",
+                                    mod_name, fname, looked_locs)
                         continue
                     mod = importer.import_module(mod_locs[0])
                     mod = handlers.fixup_handler(mod)
@@ -561,7 +578,8 @@ class Init(object):
 
         if not isinstance(vdcfg, dict):
             vdcfg = {'enabled': False}
-            LOG.warn("invalid 'vendor_data' setting. resetting to: %s", vdcfg)
+            LOG.warning("invalid 'vendor_data' setting. resetting to: %s",
+                        vdcfg)
 
         enabled = vdcfg.get('enabled')
         no_handlers = vdcfg.get('disabled_handlers', None)
@@ -616,7 +634,7 @@ class Init(object):
                 return (None, loc)
             if ncfg:
                 return (ncfg, loc)
-        return (net.generate_fallback_config(), "fallback")
+        return (self.distro.generate_fallback_config(), "fallback")
 
     def apply_network_config(self, bring_up):
         netcfg, src = self._find_networking_config()
@@ -625,10 +643,10 @@ class Init(object):
             return
 
         try:
-            LOG.debug("applying net config names for %s" % netcfg)
+            LOG.debug("applying net config names for %s", netcfg)
             self.distro.apply_network_config_names(netcfg)
         except Exception as e:
-            LOG.warn("Failed to rename devices: %s", e)
+            LOG.warning("Failed to rename devices: %s", e)
 
         if (self.datasource is not NULL_DATA_SOURCE and
                 not self.is_new_instance()):
@@ -639,10 +657,14 @@ class Init(object):
                  src, bring_up, netcfg)
         try:
             return self.distro.apply_network_config(netcfg, bring_up=bring_up)
+        except net.RendererNotFoundError as e:
+            LOG.error("Unable to render networking. Network config is "
+                      "likely broken: %s", e)
+            return
         except NotImplementedError:
-            LOG.warn("distro '%s' does not implement apply_network_config. "
-                     "networking may not be configured properly." %
-                     self.distro)
+            LOG.warning("distro '%s' does not implement apply_network_config. "
+                        "networking may not be configured properly.",
+                        self.distro)
             return
 
 
@@ -675,7 +697,9 @@ class Modules(object):
         module_list = []
         if name not in self.cfg:
             return module_list
-        cfg_mods = self.cfg[name]
+        cfg_mods = self.cfg.get(name)
+        if not cfg_mods:
+            return module_list
         # Create 'module_list', an array of hashes
         # Where hash['mod'] = module name
         #       hash['freq'] = frequency
@@ -726,15 +750,15 @@ class Modules(object):
             if not mod_name:
                 continue
             if freq and freq not in FREQUENCIES:
-                LOG.warn(("Config specified module %s"
-                          " has an unknown frequency %s"), raw_name, freq)
+                LOG.warning(("Config specified module %s"
+                             " has an unknown frequency %s"), raw_name, freq)
                 # Reset it so when ran it will get set to a known value
                 freq = None
             mod_locs, looked_locs = importer.find_module(
                 mod_name, ['', type_utils.obj_name(config)], ['handle'])
             if not mod_locs:
-                LOG.warn("Could not find module named %s (searched %s)",
-                         mod_name, looked_locs)
+                LOG.warning("Could not find module named %s (searched %s)",
+                            mod_name, looked_locs)
                 continue
             mod = config.fixup_module(importer.import_module(mod_locs[0]))
             mostly_mods.append([mod, raw_name, freq, run_args])
@@ -804,28 +828,39 @@ class Modules(object):
         skipped = []
         forced = []
         overridden = self.cfg.get('unverified_modules', [])
+        active_mods = []
+        all_distros = set([distros.ALL_DISTROS])
         for (mod, name, _freq, _args) in mostly_mods:
-            worked_distros = set(mod.distros)
+            worked_distros = set(mod.distros)  # Minimally [] per fixup_modules
             worked_distros.update(
                 distros.Distro.expand_osfamily(mod.osfamilies))
 
-            # module does not declare 'distros' or lists this distro
-            if not worked_distros or d_name in worked_distros:
-                continue
-
-            if name in overridden:
-                forced.append(name)
-            else:
-                skipped.append(name)
+            # Skip only when the following conditions are all met:
+            #  - distros are defined in the module != ALL_DISTROS
+            #  - the current d_name isn't in distros
+            #  - and the module is unverified and not in the unverified_modules
+            #    override list
+            if worked_distros and worked_distros != all_distros:
+                if d_name not in worked_distros:
+                    if name not in overridden:
+                        skipped.append(name)
+                        continue
+                    forced.append(name)
+            active_mods.append([mod, name, _freq, _args])
 
         if skipped:
-            LOG.info("Skipping modules %s because they are not verified "
+            LOG.info("Skipping modules '%s' because they are not verified "
                      "on distro '%s'.  To run anyway, add them to "
-                     "'unverified_modules' in config.", skipped, d_name)
+                     "'unverified_modules' in config.",
+                     ','.join(skipped), d_name)
         if forced:
-            LOG.info("running unverified_modules: %s", forced)
+            LOG.info("running unverified_modules: '%s'", ', '.join(forced))
 
-        return self._run_modules(mostly_mods)
+        return self._run_modules(active_mods)
+
+
+def read_runtime_config():
+    return util.read_conf(RUN_CLOUD_CONFIG)
 
 
 def fetch_base_config():
@@ -835,6 +870,8 @@ def fetch_base_config():
             util.get_builtin_cfg(),
             # Anything in your conf.d or 'default' cloud.cfg location.
             util.read_conf_with_confd(CLOUD_CONFIG),
+            # runtime config
+            read_runtime_config(),
             # Kernel/cmdline parameters override system config
             util.read_conf_from_cmdline(),
         ], reverse=True)
@@ -860,7 +897,7 @@ def _pkl_load(fname):
         pickle_contents = util.load_file(fname, decode=False)
     except Exception as e:
         if os.path.isfile(fname):
-            LOG.warn("failed loading pickle in %s: %s" % (fname, e))
+            LOG.warning("failed loading pickle in %s: %s", fname, e)
         pass
 
     # This is allowed so just return nothing successfully loaded...
