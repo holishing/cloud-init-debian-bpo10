@@ -18,6 +18,8 @@ cloud-init (18.3-1) UNRELEASED; urgency=medium
     - 0012-Fix-message-when-a-local-is-missing.patch
   * Runtime depends on fdisk (Closes: #872114).
   * Added Suggests: btrfs-progs, e2fsprogs, xfsprogs (Closes: #887226).
+  * Removed  Miguel Landaeta and Julien Danjou from uploaders, as they haven't
+    been active.
 
  -- Thomas Goirand <zigo@debian.org>  Mon, 17 Sep 2018 13:18:40 +0200
 
