@@ -15,7 +15,7 @@ Index: cloud-init/tests/unittests/test_datasource/test_cloudstack.py
          return subp
  
      def test_empty_password_doesnt_create_config(self):
-+        from ..helpers import SkipTest
++        from cloudinit.tests.helpers import SkipTest
 +        raise SkipTest("Test fails without network")
 +
          self._set_password_server_response('')
@@ -25,7 +25,7 @@ Index: cloud-init/tests/unittests/test_datasource/test_cloudstack.py
          self.assertEqual({}, ds.get_config_obj())
  
      def test_saved_password_doesnt_create_config(self):
-+        from ..helpers import SkipTest
++        from cloudinit.tests.helpers import SkipTest
 +        raise SkipTest("Test fails without network")
 +
          self._set_password_server_response('saved_password')
@@ -35,7 +35,7 @@ Index: cloud-init/tests/unittests/test_datasource/test_cloudstack.py
          self.assertEqual({}, ds.get_config_obj())
  
      def test_password_sets_password(self):
-+        from ..helpers import SkipTest
++        from cloudinit.tests.helpers import SkipTest
 +        raise SkipTest("Test fails without network")
 +
          password = 'SekritSquirrel'
@@ -45,7 +45,7 @@ Index: cloud-init/tests/unittests/test_datasource/test_cloudstack.py
          self.assertEqual(password, ds.get_config_obj()['password'])
  
      def test_bad_request_doesnt_stop_ds_from_working(self):
-+        from ..helpers import SkipTest
++        from cloudinit.tests.helpers import SkipTest
 +        raise SkipTest("Test fails without network")
 +
          self._set_password_server_response('bad_request')
@@ -55,7 +55,7 @@ Index: cloud-init/tests/unittests/test_datasource/test_cloudstack.py
          self.assertEqual(expected_request_types, request_types)
  
      def test_valid_response_means_password_marked_as_saved(self):
-+        from ..helpers import SkipTest
++        from cloudinit.tests.helpers import SkipTest
 +        raise SkipTest("Test fails without network")
 +
          password = 'SekritSquirrel'
@@ -65,7 +65,7 @@ Index: cloud-init/tests/unittests/test_datasource/test_cloudstack.py
                                      ['send_my_password', 'saved_password'])
  
      def _check_password_not_saved_for(self, response_string):
-+        from ..helpers import SkipTest
++        from cloudinit.tests.helpers import SkipTest
 +        raise SkipTest("Test fails without network")
 +
          subp = self._set_password_server_response(response_string)
