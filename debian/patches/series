@@ -1,12 +1,6 @@
-0001-Fix-the-path-to-blkid-in-test-suite.patch
 0002-disable-rhel-set-hostname-test.patch
-0003-Make-Azure-datasource-run-without-root.patch
-0004-debian-sources.list.patch
-0005-Update-syntax-of-rsyslog-snippet-is-deprecated.patch
+#0003-Make-Azure-datasource-run-without-root.patch
 0006-Skip-test_apt_v3_mirror_search_dns.patch
 0007-Skip-Cloudstack-tests-that-expect-network.patch
-0008-sysvinit-fs-dependencies.patch
 0009-Drop-all-unused-extended-version-handling.patch
-0010-PATCH-Fix-Python-code-style-errors-Closes-865577.patch
-0011-Trust-PATH-for-udevadm-and-modprobe.patch
 0012-Fix-message-when-a-local-is-missing.patch

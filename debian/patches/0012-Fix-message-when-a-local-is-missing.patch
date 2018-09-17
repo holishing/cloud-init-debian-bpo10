@@ -11,47 +11,47 @@ diff --git a/tools/Z99-cloud-locale-test.sh b/tools/Z99-cloud-locale-test.sh
 index 5912bae2..5ad3b9a6 100755
 --- a/tools/Z99-cloud-locale-test.sh
 +++ b/tools/Z99-cloud-locale-test.sh
-@@ -52,39 +52,10 @@ locale_warn() {
- 	printf " The unknown environment variables are:\n   %s\n" "$bad_kv"
- 	printf " This can affect your user experience significantly, including the\n"
- 	printf " ability to manage packages. You may install the locales by running:\n\n"
+@@ -52,39 +52,10 @@
+     printf " The unknown environment variables are:\n   %s\n" "$bad_kv"
+     printf " This can affect your user experience significantly, including the\n"
+     printf " ability to manage packages. You may install the locales by running:\n\n"
 -
--	local bad invalid="" to_gen="" sfile="/usr/share/i18n/SUPPORTED"
--	local pkgs=""
--	if [ -e "$sfile" ]; then
--		for bad in ${bad_lcs}; do
--			grep -q -i "${bad}" "$sfile" &&
--				to_gen="${to_gen} ${bad}" ||
--				invalid="${invalid} ${bad}"
--		done
--	else
--		printf "  sudo apt-get install locales\n"
--		to_gen=$bad_lcs
--	fi
--	to_gen=${to_gen# }
+-    local bad invalid="" to_gen="" sfile="/usr/share/i18n/SUPPORTED"
+-    local pkgs=""
+-    if [ -e "$sfile" ]; then
+-        for bad in ${bad_lcs}; do
+-            grep -q -i "${bad}" "$sfile" &&
+-                to_gen="${to_gen} ${bad}" ||
+-                invalid="${invalid} ${bad}"
+-        done
+-    else
+-        printf "  sudo apt-get install locales\n"
+-        to_gen=$bad_lcs
+-    fi
+-    to_gen=${to_gen# }
 -
--	local pkgs=""
--	for bad in ${to_gen}; do
--		pkgs="${pkgs} language-pack-${bad%%_*}"
--	done
--	pkgs=${pkgs# }
+-    local pkgs=""
+-    for bad in ${to_gen}; do
+-        pkgs="${pkgs} language-pack-${bad%%_*}"
+-    done
+-    pkgs=${pkgs# }
 -
--	if [ -n "${pkgs}" ]; then
--		printf "   sudo apt-get install ${pkgs# }\n"
--		printf "     or\n"
--		printf "   sudo locale-gen ${to_gen# }\n"
--		printf "\n"
--	fi
--	for bad in ${invalid}; do
--		printf "WARNING: '${bad}' is an invalid locale\n"
--	done
+-    if [ -n "${pkgs}" ]; then
+-        printf "   sudo apt-get install ${pkgs# }\n"
+-        printf "     or\n"
+-        printf "   sudo locale-gen ${to_gen# }\n"
+-        printf "\n"
+-    fi
+-    for bad in ${invalid}; do
+-        printf "WARNING: '${bad}' is an invalid locale\n"
+-    done
 -
--	printf "To see all available language packs, run:\n"
--	printf "   apt-cache search \"^language-pack-[a-z][a-z]$\"\n"
-+	printf " sudo dpkg-reconfigure locales\n\n"
-+	printf " and select the missing language. Alternatively, you can install the\n"
-+	printf " locales-all package:\n\n"
-+	printf " sudo apt-get install locales-all\n\n"
- 	printf "To disable this message for all users, run:\n"
- 	printf "   sudo touch /var/lib/cloud/instance/locale-check.skip\n"
- 	printf "_____________________________________________________________________\n\n"
+-    printf "To see all available language packs, run:\n"
+-    printf "   apt-cache search \"^language-pack-[a-z][a-z]$\"\n"
++    printf " sudo dpkg-reconfigure locales\n\n"
++    printf " and select the missing language. Alternatively, you can install the\n"
++    printf " locales-all package:\n\n"
++    printf " sudo apt-get install locales-all\n\n"
+     printf "To disable this message for all users, run:\n"
+     printf "   sudo touch /var/lib/cloud/instance/locale-check.skip\n"
+     printf "_____________________________________________________________________\n\n"

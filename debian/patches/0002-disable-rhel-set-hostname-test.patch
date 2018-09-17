@@ -9,11 +9,11 @@ Last-Update: 2013-05-29
  tests/unittests/test_handler/test_handler_set_hostname.py | 1 +
  1 file changed, 1 insertion(+)
 
-diff --git a/tests/unittests/test_handler/test_handler_set_hostname.py b/tests/unittests/test_handler/test_handler_set_hostname.py
-index 4b18de75..a6413e7b 100644
---- a/tests/unittests/test_handler/test_handler_set_hostname.py
-+++ b/tests/unittests/test_handler/test_handler_set_hostname.py
-@@ -30,6 +30,7 @@ class TestHostname(t_help.FilesystemMockingTestCase):
+Index: cloud-init/tests/unittests/test_handler/test_handler_set_hostname.py
+===================================================================
+--- cloud-init.orig/tests/unittests/test_handler/test_handler_set_hostname.py
++++ cloud-init/tests/unittests/test_handler/test_handler_set_hostname.py
+@@ -35,6 +35,7 @@ class TestHostname(t_help.FilesystemMock
          return cls(kind, {}, paths)
  
      def test_write_hostname_rhel(self):
