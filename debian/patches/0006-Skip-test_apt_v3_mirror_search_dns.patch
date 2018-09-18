@@ -16,7 +16,7 @@ Index: cloud-init/tests/unittests/test_handler/test_handler_apt_source_v3.py
      def test_apt_v3_mirror_search_dns(self):
          """test_apt_v3_mirror_search_dns - Test searching dns patterns"""
 +
-+        from ..helpers import SkipTest
++        from cloudinit.tests.helpers import SkipTest
 +        raise SkipTest("Fails if localdomain is set...")
 +
          pmir = "phit"
