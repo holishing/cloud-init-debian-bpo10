@@ -22,6 +22,7 @@ Build-Depends-Indep:
  python3-httpretty,
  python3-jinja2,
  python3-jsonpatch,
+ python3-jsonschema,
  python3-mock,
  python3-nose,
  python3-oauthlib,

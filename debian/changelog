@@ -22,6 +22,7 @@ cloud-init (18.3-1) experimental; urgency=medium
     been active.
   * Removed tools/hacking.py from debian/copyright (the file doesn't exist
     anymore).
+  * Add python3-jsonschema as build-depends.
 
  -- Thomas Goirand <zigo@debian.org>  Mon, 17 Sep 2018 13:18:40 +0200
 
