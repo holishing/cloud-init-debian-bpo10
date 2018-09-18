@@ -19,6 +19,7 @@ Build-Depends:
 Build-Depends-Indep:
  python-pyflakes,
  python3-configobj,
+ python3-contextlib2,
  python3-httpretty,
  python3-jinja2,
  python3-jsonpatch,
