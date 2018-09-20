@@ -23,6 +23,7 @@ cloud-init (18.3-1) experimental; urgency=medium
   * Removed tools/hacking.py from debian/copyright (the file doesn't exist
     anymore).
   * Add python3-jsonschema as build-depends.
+  * Build-Depends needs 0.9.5 for python3-httpretty.
 
  -- Thomas Goirand <zigo@debian.org>  Mon, 17 Sep 2018 13:18:40 +0200
 
