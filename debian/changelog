@@ -1,3 +1,9 @@
+cloud-init (18.3-3) unstable; urgency=medium
+
+  * Start cloud-init before chronyd (Closes: #910801).
+
+ -- Thomas Goirand <zigo@debian.org>  Mon, 15 Oct 2018 10:48:01 +0200
+
 cloud-init (18.3-2) unstable; urgency=medium
 
   * Upload to Unstable.

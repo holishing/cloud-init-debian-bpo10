@@ -1,0 +1,16 @@
+Description: cloud-init before chronyd
+Author: Thomas Goirand <zigo@debian.org>
+Bug-Debian: https://bugs.debian.org/910801
+Forwarded: no
+Last-Update: 2018-10-15
+
+--- cloud-init-18.3.orig/systemd/cloud-init.service.tmpl
++++ cloud-init-18.3/systemd/cloud-init.service.tmpl
+@@ -21,6 +21,7 @@ After=wicked.service
+ After=dbus.service
+ {% endif %}
+ Before=network-online.target
++Before=chronyd.service
+ Before=sshd-keygen.service
+ Before=sshd.service
+ {% if variant in ["ubuntu", "unknown", "debian"] %}
