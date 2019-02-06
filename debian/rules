@@ -12,11 +12,13 @@ override_dh_auto_install:
 		$(CURDIR)/debian/cloud-init/etc/NetworkManager/dispatcher.d/cloud-init-hook-network-manager
 
 override_dh_auto_test:
+ifeq (,$(filter nocheck,$(DEB_BUILD_OPTIONS)))
 	set -e && set -x && for pyvers in $(PYTHON3S); do \
 		PYMAJOR=`echo $$pyvers | cut -d'.' -f1` ; \
 		echo "===> Testing with python$$pyvers (python$$PYMAJOR)" ; \
 		PYTHON=python$$pyvers PYTHONPATH=. python$$pyvers -m nose -v tests/unittests ; \
 	done
+endif
 
 override_dh_installinit:
 	dh_installinit --onlyscripts --no-start --no-restart-on-upgrade --name cloud-init-local
