@@ -6,10 +6,6 @@ export PYBUILD_INSTALL_ARGS=--init-system=systemd,sysvinit_deb
 %:
 	dh $@ --with python3,systemd --buildsystem pybuild
 
-clean:
-	debconf-updatepo
-	dh $@ --with python3,systemd --buildsystem pybuild
-
 override_dh_auto_install:
 	dh_auto_install
 	mv $(CURDIR)/debian/cloud-init/etc/NetworkManager/dispatcher.d/hook-network-manager \
