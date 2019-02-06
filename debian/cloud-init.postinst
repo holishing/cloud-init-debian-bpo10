@@ -114,7 +114,7 @@ handle_preseed_local_cloud_config() {
    db_unregister "${debconf_name}" || :
 }
 
-if [ "$1" = "configure" ]; then
+if [ "$1" = "configure" ] && [ -z "$2" ]; then
    # if there are maas settings pre-seeded apply them
    handle_preseed_maas
 
