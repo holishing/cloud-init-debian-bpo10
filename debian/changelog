@@ -3,6 +3,7 @@ cloud-init (18.3-4) UNRELEASED; urgency=medium
   * Remove debconf setup of data source.
   * Don't override apt pipelining.
   * Only handle preseed on initial installation.
+  * Drop all config migration for versions older then Stretch.
 
  -- Bastian Blank <bastian.blank@credativ.de>  Wed, 06 Feb 2019 10:10:21 +0100
 
