@@ -9,7 +9,6 @@ Priority: optional
 Build-Depends:
  debhelper (>= 10),
  dh-python,
- dh-systemd,
  iproute2,
  pep8,
  po-debconf,
