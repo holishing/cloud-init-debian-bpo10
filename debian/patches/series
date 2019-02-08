@@ -5,3 +5,4 @@
 0012-Fix-message-when-a-local-is-missing.patch
 fix-sysvinit-dependencies.patch
 cloud-init-before-chronyd.patch
+0008-opennebula-also-exclude-epochseconds-from-changed-en.patch

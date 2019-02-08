@@ -1,3 +1,9 @@
+cloud-init (18.3-5) UNRELEASED; urgency=medium
+
+  * Make tests running with current bash.
+
+ -- Bastian Blank <waldi@debian.org>  Fri, 08 Feb 2019 14:46:29 +0100
+
 cloud-init (18.3-4) unstable; urgency=medium
 
   * Remove debconf setup of data source.
