@@ -4,6 +4,7 @@ cloud-init (18.3-4) UNRELEASED; urgency=medium
   * Don't override apt pipelining.
   * Only handle preseed on initial installation.
   * Drop all config migration for versions older then Stretch.
+  * Update vcs links to point to salsa.debian.org.
 
  -- Bastian Blank <bastian.blank@credativ.de>  Wed, 06 Feb 2019 10:10:21 +0100
 
