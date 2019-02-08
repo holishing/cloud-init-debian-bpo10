@@ -1,5 +1,4 @@
 0002-disable-rhel-set-hostname-test.patch
-#0003-Make-Azure-datasource-run-without-root.patch
 0006-Skip-test_apt_v3_mirror_search_dns.patch
 0007-Skip-Cloudstack-tests-that-expect-network.patch
 0009-Drop-all-unused-extended-version-handling.patch

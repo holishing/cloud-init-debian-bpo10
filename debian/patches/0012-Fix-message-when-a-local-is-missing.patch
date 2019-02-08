@@ -1,4 +1,3 @@
-From c3817d0a8a9f60b187a626c08d351ce07b213a79 Mon Sep 17 00:00:00 2001
 From: Thomas Goirand <zigo@debian.org>
 Date: Mon, 16 Oct 2017 22:11:38 +0000
 Subject: Fix message when a local is missing.
@@ -8,10 +7,10 @@ Subject: Fix message when a local is missing.
  1 file changed, 4 insertions(+), 33 deletions(-)
 
 diff --git a/tools/Z99-cloud-locale-test.sh b/tools/Z99-cloud-locale-test.sh
-index 5912bae2..5ad3b9a6 100755
+index 4978d87..cb414b5 100644
 --- a/tools/Z99-cloud-locale-test.sh
 +++ b/tools/Z99-cloud-locale-test.sh
-@@ -52,39 +52,10 @@
+@@ -52,39 +52,10 @@ locale_warn() {
      printf " The unknown environment variables are:\n   %s\n" "$bad_kv"
      printf " This can affect your user experience significantly, including the\n"
      printf " ability to manage packages. You may install the locales by running:\n\n"

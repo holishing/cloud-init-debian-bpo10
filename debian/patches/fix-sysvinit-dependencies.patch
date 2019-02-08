@@ -1,9 +1,19 @@
-Description: Fix sysv-init dependencies.
+From: Debian Cloud Team <debian-cloud@lists.debian.org>
+Date: Fri, 8 Feb 2019 14:45:04 +0100
+Subject: Fix sysv-init dependencies.
+
 Forwarded: no
 Last-Update: 2018-09-17
+---
+ sysvinit/debian/cloud-config     | 4 ++--
+ sysvinit/debian/cloud-final      | 2 +-
+ sysvinit/debian/cloud-init-local | 2 +-
+ 3 files changed, 4 insertions(+), 4 deletions(-)
 
---- cloud-init-18.3.orig/sysvinit/debian/cloud-config
-+++ cloud-init-18.3/sysvinit/debian/cloud-config
+diff --git a/sysvinit/debian/cloud-config b/sysvinit/debian/cloud-config
+index 5332274..5e4289f 100644
+--- a/sysvinit/debian/cloud-config
++++ b/sysvinit/debian/cloud-config
 @@ -1,8 +1,8 @@
  #! /bin/sh
  ### BEGIN INIT INFO
@@ -15,8 +25,10 @@ Last-Update: 2018-09-17
  # Default-Start:     2 3 4 5
  # Default-Stop:      0 1 6
  # Short-Description: Cloud init modules --mode config
---- cloud-init-18.3.orig/sysvinit/debian/cloud-final
-+++ cloud-init-18.3/sysvinit/debian/cloud-final
+diff --git a/sysvinit/debian/cloud-final b/sysvinit/debian/cloud-final
+index 55afc8b..3c98063 100644
+--- a/sysvinit/debian/cloud-final
++++ b/sysvinit/debian/cloud-final
 @@ -2,7 +2,7 @@
  ### BEGIN INIT INFO
  # Provides:          cloud-final
@@ -26,8 +38,10 @@ Last-Update: 2018-09-17
  # Default-Start:     2 3 4 5
  # Default-Stop:      0 1 6
  # Short-Description: Cloud init modules final jobs
---- cloud-init-18.3.orig/sysvinit/debian/cloud-init-local
-+++ cloud-init-18.3/sysvinit/debian/cloud-init-local
+diff --git a/sysvinit/debian/cloud-init-local b/sysvinit/debian/cloud-init-local
+index 802ee8e..e419297 100644
+--- a/sysvinit/debian/cloud-init-local
++++ b/sysvinit/debian/cloud-init-local
 @@ -2,7 +2,7 @@
  ### BEGIN INIT INFO
  # Provides:          cloud-init-local

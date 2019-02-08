@@ -1,4 +1,3 @@
-From d7fd4d9f9dfe27b6bd51c473e4296952a6cb90c1 Mon Sep 17 00:00:00 2001
 From: Nicolas Braud-Santoni <nicolas@braud-santoni.eu>
 Date: Sat, 24 Sep 2016 14:51:58 +0200
 Subject: Skip Cloudstack tests that expect network
@@ -7,11 +6,11 @@ Subject: Skip Cloudstack tests that expect network
  tests/unittests/test_datasource/test_cloudstack.py | 18 ++++++++++++++++++
  1 file changed, 18 insertions(+)
 
-Index: cloud-init/tests/unittests/test_datasource/test_cloudstack.py
-===================================================================
---- cloud-init.orig/tests/unittests/test_datasource/test_cloudstack.py
-+++ cloud-init/tests/unittests/test_datasource/test_cloudstack.py
-@@ -43,6 +43,9 @@ class TestCloudStackPasswordFetching(CiT
+diff --git a/tests/unittests/test_datasource/test_cloudstack.py b/tests/unittests/test_datasource/test_cloudstack.py
+index d6d2d6b..c52b063 100644
+--- a/tests/unittests/test_datasource/test_cloudstack.py
++++ b/tests/unittests/test_datasource/test_cloudstack.py
+@@ -43,6 +43,9 @@ class TestCloudStackPasswordFetching(CiTestCase):
          return subp
  
      def test_empty_password_doesnt_create_config(self):
@@ -21,7 +20,7 @@ Index: cloud-init/tests/unittests/test_datasource/test_cloudstack.py
          self._set_password_server_response('')
          ds = DataSourceCloudStack(
              {}, None, helpers.Paths({'run_dir': self.tmp}))
-@@ -50,6 +53,9 @@ class TestCloudStackPasswordFetching(CiT
+@@ -50,6 +53,9 @@ class TestCloudStackPasswordFetching(CiTestCase):
          self.assertEqual({}, ds.get_config_obj())
  
      def test_saved_password_doesnt_create_config(self):
@@ -31,7 +30,7 @@ Index: cloud-init/tests/unittests/test_datasource/test_cloudstack.py
          self._set_password_server_response('saved_password')
          ds = DataSourceCloudStack(
              {}, None, helpers.Paths({'run_dir': self.tmp}))
-@@ -57,6 +63,9 @@ class TestCloudStackPasswordFetching(CiT
+@@ -57,6 +63,9 @@ class TestCloudStackPasswordFetching(CiTestCase):
          self.assertEqual({}, ds.get_config_obj())
  
      def test_password_sets_password(self):
@@ -41,7 +40,7 @@ Index: cloud-init/tests/unittests/test_datasource/test_cloudstack.py
          password = 'SekritSquirrel'
          self._set_password_server_response(password)
          ds = DataSourceCloudStack(
-@@ -65,6 +74,9 @@ class TestCloudStackPasswordFetching(CiT
+@@ -65,6 +74,9 @@ class TestCloudStackPasswordFetching(CiTestCase):
          self.assertEqual(password, ds.get_config_obj()['password'])
  
      def test_bad_request_doesnt_stop_ds_from_working(self):
@@ -51,7 +50,7 @@ Index: cloud-init/tests/unittests/test_datasource/test_cloudstack.py
          self._set_password_server_response('bad_request')
          ds = DataSourceCloudStack(
              {}, None, helpers.Paths({'run_dir': self.tmp}))
-@@ -80,6 +92,9 @@ class TestCloudStackPasswordFetching(CiT
+@@ -80,6 +92,9 @@ class TestCloudStackPasswordFetching(CiTestCase):
          self.assertEqual(expected_request_types, request_types)
  
      def test_valid_response_means_password_marked_as_saved(self):
@@ -61,7 +60,7 @@ Index: cloud-init/tests/unittests/test_datasource/test_cloudstack.py
          password = 'SekritSquirrel'
          subp = self._set_password_server_response(password)
          ds = DataSourceCloudStack(
-@@ -89,6 +104,9 @@ class TestCloudStackPasswordFetching(CiT
+@@ -89,6 +104,9 @@ class TestCloudStackPasswordFetching(CiTestCase):
                                      ['send_my_password', 'saved_password'])
  
      def _check_password_not_saved_for(self, response_string):
