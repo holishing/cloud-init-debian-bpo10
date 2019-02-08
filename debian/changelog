@@ -1,4 +1,4 @@
-cloud-init (18.3-4) UNRELEASED; urgency=medium
+cloud-init (18.3-4) unstable; urgency=medium
 
   * Remove debconf setup of data source.
   * Don't override apt pipelining.
@@ -7,7 +7,7 @@ cloud-init (18.3-4) UNRELEASED; urgency=medium
   * Update vcs links to point to salsa.debian.org.
   * Drop obsolete build-dependency on dh-systemd.
 
- -- Bastian Blank <bastian.blank@credativ.de>  Wed, 06 Feb 2019 10:10:21 +0100
+ -- Bastian Blank <waldi@debian.org>  Fri, 08 Feb 2019 10:39:53 +0100
 
 cloud-init (18.3-3) unstable; urgency=medium
 
