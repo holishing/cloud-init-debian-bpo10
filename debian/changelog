@@ -1,3 +1,11 @@
+cloud-init (18.3-6) unstable; urgency=high
+
+  * CVE-2019-0816: Extraneous SSH Public Keys added to Authorized Keys file.
+    Applied a refreshed patch from upstream: azure: Filter list of ssh keys
+    pulled from fabric (Closes: #926043).
+
+ -- Thomas Goirand <zigo@debian.org>  Thu, 25 Apr 2019 08:54:18 +0200
+
 cloud-init (18.3-5) unstable; urgency=medium
 
   * Make tests running with current bash.

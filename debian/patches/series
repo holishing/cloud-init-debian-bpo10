@@ -6,3 +6,4 @@
 fix-sysvinit-dependencies.patch
 cloud-init-before-chronyd.patch
 0008-opennebula-also-exclude-epochseconds-from-changed-en.patch
+CVE-2019-0816_Filter_list_of_ssh_keys_pulled_from_fabric.patch
