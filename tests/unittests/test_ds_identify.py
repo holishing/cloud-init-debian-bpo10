@@ -12,6 +12,7 @@ from cloudinit.tests.helpers import (
 
 from cloudinit.sources import DataSourceIBMCloud as ds_ibm
 from cloudinit.sources import DataSourceSmartOS as ds_smartos
+from cloudinit.sources import DataSourceOracle as ds_oracle
 
 UNAME_MYSYS = ("Linux bart 4.4.0-62-generic #83-Ubuntu "
                "SMP Wed Jan 18 14:10:15 UTC 2017 x86_64 GNU/Linux")
@@ -88,6 +89,7 @@ CallReturn = namedtuple('CallReturn',
 
 class DsIdentifyBase(CiTestCase):
     dsid_path = os.path.realpath('tools/ds-identify')
+    allowed_subp = ['sh']
 
     def call(self, rootd=None, mocks=None, func="main", args=None, files=None,
              policy_dmi=DI_DEFAULT_POLICY,
@@ -136,6 +138,9 @@ class DsIdentifyBase(CiTestCase):
             {'name': 'detect_virt', 'RET': 'none', 'ret': 1},
             {'name': 'uname', 'out': UNAME_MYSYS},
             {'name': 'blkid', 'out': BLKID_EFI_ROOT},
+            {'name': 'ovf_vmware_transport_guestinfo',
+             'out': 'No value found', 'ret': 1},
+
         ]
 
         written = [d['name'] for d in mocks]
@@ -430,13 +435,21 @@ class TestDsIdentify(DsIdentifyBase):
         """Open Telecom identification."""
         self._test_ds_found('OpenStack-OpenTelekom')
 
+    def test_openstack_asset_tag_nova(self):
+        """OpenStack identification via asset tag OpenStack Nova."""
+        self._test_ds_found('OpenStack-AssetTag-Nova')
+
+    def test_openstack_asset_tag_copute(self):
+        """OpenStack identification via asset tag OpenStack Compute."""
+        self._test_ds_found('OpenStack-AssetTag-Compute')
+
     def test_openstack_on_non_intel_is_maybe(self):
         """On non-Intel, openstack without dmi info is maybe.
 
         nova does not identify itself on platforms other than intel.
            https://bugs.launchpad.net/cloud-init/+bugs?field.tag=dsid-nova"""
 
-        data = VALID_CFG['OpenStack'].copy()
+        data = copy.deepcopy(VALID_CFG['OpenStack'])
         del data['files'][P_PRODUCT_NAME]
         data.update({'policy_dmi': POLICY_FOUND_OR_MAYBE,
                      'policy_no_dmi': POLICY_FOUND_OR_MAYBE})
@@ -473,6 +486,10 @@ class TestDsIdentify(DsIdentifyBase):
         """OVF is identified when iso9660 cdrom path contains ovf schema."""
         self._test_ds_found('OVF')
 
+    def test_ovf_on_vmware_guestinfo_found(self):
+        """OVF guest info is found on vmware."""
+        self._test_ds_found('OVF-guestinfo')
+
     def test_ovf_on_vmware_iso_found_when_vmware_customization(self):
         """OVF is identified when vmware customization is enabled."""
         self._test_ds_found('OVF-vmware-customization')
@@ -497,7 +514,7 @@ class TestDsIdentify(DsIdentifyBase):
 
         # Add recognized labels
         valid_ovf_labels = ['ovf-transport', 'OVF-TRANSPORT',
-                            "OVFENV", "ovfenv"]
+                            "OVFENV", "ovfenv", "OVF ENV", "ovf env"]
         for valid_ovf_label in valid_ovf_labels:
             ovf_cdrom_by_label['mocks'][0]['out'] = blkid_out([
                 {'DEVNAME': 'sda1', 'TYPE': 'ext4', 'LABEL': 'rootfs'},
@@ -507,9 +524,37 @@ class TestDsIdentify(DsIdentifyBase):
             self._check_via_dict(
                 ovf_cdrom_by_label, rc=RC_FOUND, dslist=['OVF', DS_NONE])
 
+    def test_ovf_on_vmware_iso_found_by_cdrom_with_different_size(self):
+        """OVF is identified by well-known iso9660 labels."""
+        ovf_cdrom_with_size = copy.deepcopy(VALID_CFG['OVF'])
+
+        # Set cdrom size to 20480 (10MB in 512 byte units)
+        ovf_cdrom_with_size['files']['sys/class/block/sr0/size'] = '20480\n'
+        self._check_via_dict(
+            ovf_cdrom_with_size, rc=RC_NOT_FOUND, policy_dmi="disabled")
+
+        # Set cdrom size to 204800 (100MB in 512 byte units)
+        ovf_cdrom_with_size['files']['sys/class/block/sr0/size'] = '204800\n'
+        self._check_via_dict(
+            ovf_cdrom_with_size, rc=RC_NOT_FOUND, policy_dmi="disabled")
+
+        # Set cdrom size to 18432 (9MB in 512 byte units)
+        ovf_cdrom_with_size['files']['sys/class/block/sr0/size'] = '18432\n'
+        self._check_via_dict(
+            ovf_cdrom_with_size, rc=RC_FOUND, dslist=['OVF', DS_NONE])
+
+        # Set cdrom size to 2048 (1MB in 512 byte units)
+        ovf_cdrom_with_size['files']['sys/class/block/sr0/size'] = '2048\n'
+        self._check_via_dict(
+            ovf_cdrom_with_size, rc=RC_FOUND, dslist=['OVF', DS_NONE])
+
     def test_default_nocloud_as_vdb_iso9660(self):
         """NoCloud is found with iso9660 filesystem on non-cdrom disk."""
         self._test_ds_found('NoCloud')
+
+    def test_nocloud_upper(self):
+        """NoCloud is found with uppercase filesystem label."""
+        self._test_ds_found('NoCloudUpper')
 
     def test_nocloud_seed(self):
         """Nocloud seed directory."""
@@ -596,6 +641,18 @@ class TestIsIBMProvisioning(DsIdentifyBase):
         ret = self.call(rootd=rootd, func=self.funcname)
         self.assertEqual(shell_true, ret.rc)
         self.assertIn("from current boot", ret.stderr)
+
+
+class TestOracle(DsIdentifyBase):
+    def test_found_by_chassis(self):
+        """Simple positive test of Oracle by chassis id."""
+        self._test_ds_found('Oracle')
+
+    def test_not_found(self):
+        """Simple negative test of Oracle."""
+        mycfg = copy.deepcopy(VALID_CFG['Oracle'])
+        mycfg['files'][P_CHASSIS_ASSET_TAG] = "Not Oracle"
+        self._check_via_dict(mycfg, rc=RC_NOT_FOUND)
 
 
 def blkid_out(disks=None):
@@ -692,6 +749,19 @@ VALID_CFG = {
             'dev/vdb': 'pretend iso content for cidata\n',
         }
     },
+    'NoCloudUpper': {
+        'ds': 'NoCloud',
+        'mocks': [
+            MOCK_VIRT_IS_KVM,
+            {'name': 'blkid', 'ret': 0,
+             'out': blkid_out(
+                 BLKID_UEFI_UBUNTU +
+                 [{'DEVNAME': 'vdb', 'TYPE': 'iso9660', 'LABEL': 'CIDATA'}])},
+        ],
+        'files': {
+            'dev/vdb': 'pretend iso content for cidata\n',
+        }
+    },
     'NoCloud-seed': {
         'ds': 'NoCloud',
         'files': {
@@ -719,6 +789,18 @@ VALID_CFG = {
         # OTC gen1 (Xen) hosts use OpenStack datasource, LP: #1756471
         'ds': 'OpenStack',
         'files': {P_CHASSIS_ASSET_TAG: 'OpenTelekomCloud\n'},
+        'mocks': [MOCK_VIRT_IS_XEN],
+    },
+    'OpenStack-AssetTag-Nova': {
+        # VMware vSphere can't modify product-name, LP: #1669875
+        'ds': 'OpenStack',
+        'files': {P_CHASSIS_ASSET_TAG: 'OpenStack Nova\n'},
+        'mocks': [MOCK_VIRT_IS_XEN],
+    },
+    'OpenStack-AssetTag-Compute': {
+        # VMware vSphere can't modify product-name, LP: #1669875
+        'ds': 'OpenStack',
+        'files': {P_CHASSIS_ASSET_TAG: 'OpenStack Compute\n'},
         'mocks': [MOCK_VIRT_IS_XEN],
     },
     'OVF-seed': {
@@ -757,7 +839,16 @@ VALID_CFG = {
         ],
         'files': {
             'dev/sr0': 'pretend ovf iso has ' + OVF_MATCH_STRING + '\n',
+            'sys/class/block/sr0/size': '2048\n',
         }
+    },
+    'OVF-guestinfo': {
+        'ds': 'OVF',
+        'mocks': [
+            {'name': 'ovf_vmware_transport_guestinfo', 'ret': 0,
+             'out': '<?xml version="1.0" encoding="UTF-8"?>\n<Environment'},
+            MOCK_VIRT_IS_VMWARE,
+        ],
     },
     'ConfigDrive': {
         'ds': 'ConfigDrive',
@@ -837,6 +928,12 @@ VALID_CFG = {
                    'LABEL': 'cloudimg-rootfs', 'PARTUUID': uuid4()}]),
              },
         ],
+    },
+    'Oracle': {
+        'ds': 'Oracle',
+        'files': {
+            P_CHASSIS_ASSET_TAG: ds_oracle.CHASSIS_ASSET_TAG + '\n',
+        }
     },
     'SmartOS-bhyve': {
         'ds': 'SmartOS',

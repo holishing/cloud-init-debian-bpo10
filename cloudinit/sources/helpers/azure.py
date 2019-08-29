@@ -16,8 +16,28 @@ from xml.etree import ElementTree
 
 from cloudinit import url_helper
 from cloudinit import util
+from cloudinit.reporting import events
 
 LOG = logging.getLogger(__name__)
+
+# This endpoint matches the format as found in dhcp lease files, since this
+# value is applied if the endpoint can't be found within a lease file
+DEFAULT_WIRESERVER_ENDPOINT = "a8:3f:81:10"
+
+azure_ds_reporter = events.ReportEventStack(
+    name="azure-ds",
+    description="initialize reporter for azure ds",
+    reporting_enabled=True)
+
+
+def azure_ds_telemetry_reporter(func):
+    def impl(*args, **kwargs):
+        with events.ReportEventStack(
+                name=func.__name__,
+                description=func.__name__,
+                parent=azure_ds_reporter):
+            return func(*args, **kwargs)
+    return impl
 
 
 @contextmanager
@@ -119,6 +139,7 @@ class OpenSSLManager(object):
     def clean_up(self):
         util.del_dir(self.tmpdir)
 
+    @azure_ds_telemetry_reporter
     def generate_certificate(self):
         LOG.debug('Generating certificate for communication with fabric...')
         if self.certificate is not None:
@@ -138,9 +159,40 @@ class OpenSSLManager(object):
             self.certificate = certificate
         LOG.debug('New certificate generated.')
 
-    def parse_certificates(self, certificates_xml):
-        tag = ElementTree.fromstring(certificates_xml).find(
-            './/Data')
+    @staticmethod
+    @azure_ds_telemetry_reporter
+    def _run_x509_action(action, cert):
+        cmd = ['openssl', 'x509', '-noout', action]
+        result, _ = util.subp(cmd, data=cert)
+        return result
+
+    @azure_ds_telemetry_reporter
+    def _get_ssh_key_from_cert(self, certificate):
+        pub_key = self._run_x509_action('-pubkey', certificate)
+        keygen_cmd = ['ssh-keygen', '-i', '-m', 'PKCS8', '-f', '/dev/stdin']
+        ssh_key, _ = util.subp(keygen_cmd, data=pub_key)
+        return ssh_key
+
+    @azure_ds_telemetry_reporter
+    def _get_fingerprint_from_cert(self, certificate):
+        """openssl x509 formats fingerprints as so:
+        'SHA1 Fingerprint=07:3E:19:D1:4D:1C:79:92:24:C6:A0:FD:8D:DA:\
+        B6:A8:BF:27:D4:73\n'
+
+        Azure control plane passes that fingerprint as so:
+        '073E19D14D1C799224C6A0FD8DDAB6A8BF27D473'
+        """
+        raw_fp = self._run_x509_action('-fingerprint', certificate)
+        eq = raw_fp.find('=')
+        octets = raw_fp[eq+1:-1].split(':')
+        return ''.join(octets)
+
+    @azure_ds_telemetry_reporter
+    def _decrypt_certs_from_xml(self, certificates_xml):
+        """Decrypt the certificates XML document using the our private key;
+           return the list of certs and private keys contained in the doc.
+        """
+        tag = ElementTree.fromstring(certificates_xml).find('.//Data')
         certificates_content = tag.text
         lines = [
             b'MIME-Version: 1.0',
@@ -151,32 +203,31 @@ class OpenSSLManager(object):
             certificates_content.encode('utf-8'),
         ]
         with cd(self.tmpdir):
-            with open('Certificates.p7m', 'wb') as f:
-                f.write(b'\n'.join(lines))
             out, _ = util.subp(
-                'openssl cms -decrypt -in Certificates.p7m -inkey'
+                'openssl cms -decrypt -in /dev/stdin -inkey'
                 ' {private_key} -recip {certificate} | openssl pkcs12 -nodes'
                 ' -password pass:'.format(**self.certificate_names),
-                shell=True)
-        private_keys, certificates = [], []
+                shell=True, data=b'\n'.join(lines))
+        return out
+
+    @azure_ds_telemetry_reporter
+    def parse_certificates(self, certificates_xml):
+        """Given the Certificates XML document, return a dictionary of
+           fingerprints and associated SSH keys derived from the certs."""
+        out = self._decrypt_certs_from_xml(certificates_xml)
         current = []
+        keys = {}
         for line in out.splitlines():
             current.append(line)
             if re.match(r'[-]+END .*?KEY[-]+$', line):
-                private_keys.append('\n'.join(current))
+                # ignore private_keys
                 current = []
             elif re.match(r'[-]+END .*?CERTIFICATE[-]+$', line):
-                certificates.append('\n'.join(current))
+                certificate = '\n'.join(current)
+                ssh_key = self._get_ssh_key_from_cert(certificate)
+                fingerprint = self._get_fingerprint_from_cert(certificate)
+                keys[fingerprint] = ssh_key
                 current = []
-        keys = []
-        for certificate in certificates:
-            with cd(self.tmpdir):
-                public_key, _ = util.subp(
-                    'openssl x509 -noout -pubkey |'
-                    'ssh-keygen -i -m PKCS8 -f /dev/stdin',
-                    data=certificate,
-                    shell=True)
-            keys.append(public_key)
         return keys
 
 
@@ -206,7 +257,6 @@ class WALinuxAgentShim(object):
         self.dhcpoptions = dhcp_options
         self._endpoint = None
         self.openssl_manager = None
-        self.values = {}
         self.lease_file = fallback_lease_file
 
     def clean_up(self):
@@ -241,14 +291,21 @@ class WALinuxAgentShim(object):
         return socket.inet_ntoa(packed_bytes)
 
     @staticmethod
+    @azure_ds_telemetry_reporter
     def _networkd_get_value_from_leases(leases_d=None):
         return dhcp.networkd_get_option_from_leases(
             'OPTION_245', leases_d=leases_d)
 
     @staticmethod
+    @azure_ds_telemetry_reporter
     def _get_value_from_leases_file(fallback_lease_file):
         leases = []
-        content = util.load_file(fallback_lease_file)
+        try:
+            content = util.load_file(fallback_lease_file)
+        except IOError as ex:
+            LOG.error("Failed to read %s: %s", fallback_lease_file, ex)
+            return None
+
         LOG.debug("content is %s", content)
         option_name = _get_dhcp_endpoint_option_name()
         for line in content.splitlines():
@@ -263,6 +320,7 @@ class WALinuxAgentShim(object):
             return leases[-1]
 
     @staticmethod
+    @azure_ds_telemetry_reporter
     def _load_dhclient_json():
         dhcp_options = {}
         hooks_dir = WALinuxAgentShim._get_hooks_dir()
@@ -281,6 +339,7 @@ class WALinuxAgentShim(object):
         return dhcp_options
 
     @staticmethod
+    @azure_ds_telemetry_reporter
     def _get_value_from_dhcpoptions(dhcp_options):
         if dhcp_options is None:
             return None
@@ -294,6 +353,7 @@ class WALinuxAgentShim(object):
         return _value
 
     @staticmethod
+    @azure_ds_telemetry_reporter
     def find_endpoint(fallback_lease_file=None, dhcp245=None):
         value = None
         if dhcp245 is not None:
@@ -320,16 +380,18 @@ class WALinuxAgentShim(object):
                           fallback_lease_file)
                 value = WALinuxAgentShim._get_value_from_leases_file(
                     fallback_lease_file)
-
         if value is None:
-            raise ValueError('No endpoint found.')
+            LOG.warning("No lease found; using default endpoint")
+            value = DEFAULT_WIRESERVER_ENDPOINT
 
         endpoint_ip_address = WALinuxAgentShim.get_ip_from_lease_value(value)
         LOG.debug('Azure endpoint found at %s', endpoint_ip_address)
         return endpoint_ip_address
 
-    def register_with_azure_and_fetch_data(self):
-        self.openssl_manager = OpenSSLManager()
+    @azure_ds_telemetry_reporter
+    def register_with_azure_and_fetch_data(self, pubkey_info=None):
+        if self.openssl_manager is None:
+            self.openssl_manager = OpenSSLManager()
         http_client = AzureEndpointHttpClient(self.openssl_manager.certificate)
         LOG.info('Registering with Azure...')
         attempts = 0
@@ -347,17 +409,39 @@ class WALinuxAgentShim(object):
             attempts += 1
         LOG.debug('Successfully fetched GoalState XML.')
         goal_state = GoalState(response.contents, http_client)
-        public_keys = []
-        if goal_state.certificates_xml is not None:
+        ssh_keys = []
+        if goal_state.certificates_xml is not None and pubkey_info is not None:
             LOG.debug('Certificate XML found; parsing out public keys.')
-            public_keys = self.openssl_manager.parse_certificates(
+            keys_by_fingerprint = self.openssl_manager.parse_certificates(
                 goal_state.certificates_xml)
-        data = {
-            'public-keys': public_keys,
-        }
+            ssh_keys = self._filter_pubkeys(keys_by_fingerprint, pubkey_info)
         self._report_ready(goal_state, http_client)
-        return data
+        return {'public-keys': ssh_keys}
 
+    def _filter_pubkeys(self, keys_by_fingerprint, pubkey_info):
+        """cloud-init expects a straightforward array of keys to be dropped
+           into the user's authorized_keys file. Azure control plane exposes
+           multiple public keys to the VM via wireserver. Select just the
+           user's key(s) and return them, ignoring any other certs.
+        """
+        keys = []
+        for pubkey in pubkey_info:
+            if 'value' in pubkey and pubkey['value']:
+                keys.append(pubkey['value'])
+            elif 'fingerprint' in pubkey and pubkey['fingerprint']:
+                fingerprint = pubkey['fingerprint']
+                if fingerprint in keys_by_fingerprint:
+                    keys.append(keys_by_fingerprint[fingerprint])
+                else:
+                    LOG.warning("ovf-env.xml specified PublicKey fingerprint "
+                                "%s not found in goalstate XML", fingerprint)
+            else:
+                LOG.warning("ovf-env.xml specified PublicKey with neither "
+                            "value nor fingerprint: %s", pubkey)
+
+        return keys
+
+    @azure_ds_telemetry_reporter
     def _report_ready(self, goal_state, http_client):
         LOG.debug('Reporting ready to Azure fabric.')
         document = self.REPORT_READY_XML_TEMPLATE.format(
@@ -373,11 +457,13 @@ class WALinuxAgentShim(object):
         LOG.info('Reported ready to Azure fabric.')
 
 
-def get_metadata_from_fabric(fallback_lease_file=None, dhcp_opts=None):
+@azure_ds_telemetry_reporter
+def get_metadata_from_fabric(fallback_lease_file=None, dhcp_opts=None,
+                             pubkey_info=None):
     shim = WALinuxAgentShim(fallback_lease_file=fallback_lease_file,
                             dhcp_options=dhcp_opts)
     try:
-        return shim.register_with_azure_and_fetch_data()
+        return shim.register_with_azure_and_fetch_data(pubkey_info=pubkey_info)
     finally:
         shim.clean_up()
 

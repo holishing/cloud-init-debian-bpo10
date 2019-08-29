@@ -89,7 +89,9 @@ class DataSourceAltCloud(sources.DataSource):
         '''
         Description:
             Get the type for the cloud back end this instance is running on
-            by examining the string returned by reading the dmi data.
+            by examining the string returned by reading either:
+                CLOUD_INFO_FILE or
+                the dmi data.
 
         Input:
             None
@@ -99,7 +101,14 @@ class DataSourceAltCloud(sources.DataSource):
             'RHEV', 'VSPHERE' or 'UNKNOWN'
 
         '''
-
+        if os.path.exists(CLOUD_INFO_FILE):
+            try:
+                cloud_type = util.load_file(CLOUD_INFO_FILE).strip().upper()
+            except IOError:
+                util.logexc(LOG, 'Unable to access cloud info file at %s.',
+                            CLOUD_INFO_FILE)
+                return 'UNKNOWN'
+            return cloud_type
         system_name = util.read_dmi_data("system-product-name")
         if not system_name:
             return 'UNKNOWN'
@@ -134,15 +143,7 @@ class DataSourceAltCloud(sources.DataSource):
 
         LOG.debug('Invoked get_data()')
 
-        if os.path.exists(CLOUD_INFO_FILE):
-            try:
-                cloud_type = util.load_file(CLOUD_INFO_FILE).strip().upper()
-            except IOError:
-                util.logexc(LOG, 'Unable to access cloud info file at %s.',
-                            CLOUD_INFO_FILE)
-                return False
-        else:
-            cloud_type = self.get_cloud_type()
+        cloud_type = self.get_cloud_type()
 
         LOG.debug('cloud_type: %s', str(cloud_type))
 
@@ -160,6 +161,15 @@ class DataSourceAltCloud(sources.DataSource):
         # No user data found
         util.logexc(LOG, 'Failed accessing user data.')
         return False
+
+    def _get_subplatform(self):
+        """Return the subplatform metadata details."""
+        cloud_type = self.get_cloud_type()
+        if not hasattr(self, 'source'):
+            self.source = sources.METADATA_UNKNOWN
+        if cloud_type == 'RHEV':
+            self.source = '/dev/fd0'
+        return '%s (%s)' % (cloud_type.lower(), self.source)
 
     def user_data_rhevm(self):
         '''
@@ -181,27 +191,18 @@ class DataSourceAltCloud(sources.DataSource):
 
         # modprobe floppy
         try:
-            cmd = CMD_PROBE_FLOPPY
-            (cmd_out, _err) = util.subp(cmd)
-            LOG.debug('Command: %s\nOutput%s', ' '.join(cmd), cmd_out)
+            modprobe_floppy()
         except ProcessExecutionError as e:
-            util.logexc(LOG, 'Failed command: %s\n%s', ' '.join(cmd), e)
-            return False
-        except OSError as e:
-            util.logexc(LOG, 'Failed command: %s\n%s', ' '.join(cmd), e)
+            util.logexc(LOG, 'Failed modprobe: %s', e)
             return False
 
         floppy_dev = '/dev/fd0'
 
         # udevadm settle for floppy device
         try:
-            (cmd_out, _err) = util.udevadm_settle(exists=floppy_dev, timeout=5)
-            LOG.debug('Command: %s\nOutput%s', ' '.join(cmd), cmd_out)
-        except ProcessExecutionError as e:
-            util.logexc(LOG, 'Failed command: %s\n%s', ' '.join(cmd), e)
-            return False
-        except OSError as e:
-            util.logexc(LOG, 'Failed command: %s\n%s', ' '.join(cmd), e)
+            util.udevadm_settle(exists=floppy_dev, timeout=5)
+        except (ProcessExecutionError, OSError) as e:
+            util.logexc(LOG, 'Failed udevadm_settle: %s\n', e)
             return False
 
         try:
@@ -241,6 +242,7 @@ class DataSourceAltCloud(sources.DataSource):
             try:
                 return_str = util.mount_cb(cdrom_dev, read_user_data_callback)
                 if return_str:
+                    self.source = cdrom_dev
                     break
             except OSError as err:
                 if err.errno != errno.ENOENT:
@@ -256,6 +258,11 @@ class DataSourceAltCloud(sources.DataSource):
             return True
         else:
             return False
+
+
+def modprobe_floppy():
+    out, _err = util.subp(CMD_PROBE_FLOPPY)
+    LOG.debug('Command: %s\nOutput%s', ' '.join(CMD_PROBE_FLOPPY), out)
 
 
 # Used to match classes to dependencies

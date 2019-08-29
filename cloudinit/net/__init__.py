@@ -12,6 +12,7 @@ import re
 
 from cloudinit.net.network_state import mask_to_net_prefix
 from cloudinit import util
+from cloudinit.url_helper import UrlError, readurl
 
 LOG = logging.getLogger(__name__)
 SYS_CLASS_NET = "/sys/class/net/"
@@ -569,6 +570,20 @@ def get_interface_mac(ifname):
     return read_sys_net_safe(ifname, path)
 
 
+def get_ib_interface_hwaddr(ifname, ethernet_format):
+    """Returns the string value of an Infiniband interface's hardware
+    address. If ethernet_format is True, an Ethernet MAC-style 6 byte
+    representation of the address will be returned.
+    """
+    # Type 32 is Infiniband.
+    if read_sys_net_safe(ifname, 'type') == '32':
+        mac = get_interface_mac(ifname)
+        if mac and ethernet_format:
+            # Use bytes 13-15 and 18-20 of the hardware address.
+            mac = mac[36:-14] + mac[51:]
+        return mac
+
+
 def get_interfaces_by_mac():
     """Build a dictionary of tuples {mac: name}.
 
@@ -580,6 +595,15 @@ def get_interfaces_by_mac():
                 "duplicate mac found! both '%s' and '%s' have mac '%s'" %
                 (name, ret[mac], mac))
         ret[mac] = name
+        # Try to get an Infiniband hardware address (in 6 byte Ethernet format)
+        # for the interface.
+        ib_mac = get_ib_interface_hwaddr(name, True)
+        if ib_mac:
+            if ib_mac in ret:
+                raise RuntimeError(
+                    "duplicate mac found! both '%s' and '%s' have mac '%s'" %
+                    (name, ret[ib_mac], ib_mac))
+            ret[ib_mac] = name
     return ret
 
 
@@ -589,7 +613,8 @@ def get_interfaces():
     Bridges and any devices that have a 'stolen' mac are excluded."""
     ret = []
     devs = get_devicelist()
-    empty_mac = '00:00:00:00:00:00'
+    # 16 somewhat arbitrarily chosen.  Normally a mac is 6 '00:' tokens.
+    zero_mac = ':'.join(('00',) * 16)
     for name in devs:
         if not interface_has_own_mac(name):
             continue
@@ -597,26 +622,64 @@ def get_interfaces():
             continue
         if is_vlan(name):
             continue
+        if is_bond(name):
+            continue
         mac = get_interface_mac(name)
         # some devices may not have a mac (tun0)
         if not mac:
             continue
-        if mac == empty_mac and name != 'lo':
+        # skip nics that have no mac (00:00....)
+        if name != 'lo' and mac == zero_mac[:len(mac)]:
             continue
         ret.append((name, mac, device_driver(name), device_devid(name)))
     return ret
 
 
+def get_ib_hwaddrs_by_interface():
+    """Build a dictionary mapping Infiniband interface names to their hardware
+    address."""
+    ret = {}
+    for name, _, _, _ in get_interfaces():
+        ib_mac = get_ib_interface_hwaddr(name, False)
+        if ib_mac:
+            if ib_mac in ret:
+                raise RuntimeError(
+                    "duplicate mac found! both '%s' and '%s' have mac '%s'" %
+                    (name, ret[ib_mac], ib_mac))
+            ret[name] = ib_mac
+    return ret
+
+
+def has_url_connectivity(url):
+    """Return true when the instance has access to the provided URL
+
+    Logs a warning if url is not the expected format.
+    """
+    if not any([url.startswith('http://'), url.startswith('https://')]):
+        LOG.warning(
+            "Ignoring connectivity check. Expected URL beginning with http*://"
+            " received '%s'", url)
+        return False
+    try:
+        readurl(url, timeout=5)
+    except UrlError:
+        return False
+    return True
+
+
 class EphemeralIPv4Network(object):
     """Context manager which sets up temporary static network configuration.
 
-    No operations are performed if the provided interface is already connected.
+    No operations are performed if the provided interface already has the
+    specified configuration.
+    This can be verified with the connectivity_url.
     If unconnected, bring up the interface with valid ip, prefix and broadcast.
     If router is provided setup a default route for that interface. Upon
     context exit, clean up the interface leaving no configuration behind.
     """
 
-    def __init__(self, interface, ip, prefix_or_mask, broadcast, router=None):
+    def __init__(self, interface, ip, prefix_or_mask, broadcast, router=None,
+                 connectivity_url=None, static_routes=None):
         """Setup context manager and validate call signature.
 
         @param interface: Name of the network interface to bring up.
@@ -625,6 +688,9 @@ class EphemeralIPv4Network(object):
             prefix.
         @param broadcast: Broadcast address for the IPv4 network.
         @param router: Optionally the default gateway IP.
+        @param connectivity_url: Optionally, a URL to verify if a usable
+           connection already exists.
+        @param static_routes: Optionally a list of static routes from DHCP
         """
         if not all([interface, ip, prefix_or_mask, broadcast]):
             raise ValueError(
@@ -635,16 +701,40 @@ class EphemeralIPv4Network(object):
         except ValueError as e:
             raise ValueError(
                 'Cannot setup network: {0}'.format(e))
+
+        self.connectivity_url = connectivity_url
         self.interface = interface
         self.ip = ip
         self.broadcast = broadcast
         self.router = router
+        self.static_routes = static_routes
         self.cleanup_cmds = []  # List of commands to run to cleanup state.
 
     def __enter__(self):
         """Perform ephemeral network setup if interface is not connected."""
+        if self.connectivity_url:
+            if has_url_connectivity(self.connectivity_url):
+                LOG.debug(
+                    'Skip ephemeral network setup, instance has connectivity'
+                    ' to %s', self.connectivity_url)
+                return
+
         self._bringup_device()
-        if self.router:
+
+        # rfc3442 requires us to ignore the router config *if* classless static
+        # routes are provided.
+        #
+        # https://tools.ietf.org/html/rfc3442
+        #
+        # If the DHCP server returns both a Classless Static Routes option and
+        # a Router option, the DHCP client MUST ignore the Router option.
+        #
+        # Similarly, if the DHCP server returns both a Classless Static Routes
+        # option and a Static Routes option, the DHCP client MUST ignore the
+        # Static Routes option.
+        if self.static_routes:
+            self._bringup_static_routes()
+        elif self.router:
             self._bringup_router()
 
     def __exit__(self, excp_type, excp_value, excp_traceback):
@@ -688,6 +778,20 @@ class EphemeralIPv4Network(object):
                 ['ip', '-family', 'inet', 'addr', 'del', cidr, 'dev',
                  self.interface])
 
+    def _bringup_static_routes(self):
+        # static_routes = [("169.254.169.254/32", "130.56.248.255"),
+        #                  ("0.0.0.0/0", "130.56.240.1")]
+        for net_address, gateway in self.static_routes:
+            via_arg = []
+            if gateway != "0.0.0.0/0":
+                via_arg = ['via', gateway]
+            util.subp(
+                ['ip', '-4', 'route', 'add', net_address] + via_arg +
+                ['dev', self.interface], capture=True)
+            self.cleanup_cmds.insert(
+                0, ['ip', '-4', 'route', 'del', net_address] + via_arg +
+                   ['dev', self.interface])
+
     def _bringup_router(self):
         """Perform the ip commands to fully setup the router if needed."""
         # Check if a default route exists and exit if it does
@@ -697,6 +801,13 @@ class EphemeralIPv4Network(object):
                 'Skip ephemeral route setup. %s already has default route: %s',
                 self.interface, out.strip())
             return
+        util.subp(
+            ['ip', '-4', 'route', 'add', self.router, 'dev', self.interface,
+             'src', self.ip], capture=True)
+        self.cleanup_cmds.insert(
+            0,
+            ['ip', '-4', 'route', 'del', self.router, 'dev', self.interface,
+             'src', self.ip])
         util.subp(
             ['ip', '-4', 'route', 'add', 'default', 'via', self.router,
              'dev', self.interface], capture=True)

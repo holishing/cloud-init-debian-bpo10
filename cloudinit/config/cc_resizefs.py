@@ -81,7 +81,7 @@ def _resize_xfs(mount_point, devpth):
 
 
 def _resize_ufs(mount_point, devpth):
-    return ('growfs', '-y', devpth)
+    return ('growfs', '-y', mount_point)
 
 
 def _resize_zfs(mount_point, devpth):
@@ -101,7 +101,7 @@ def _can_skip_resize_ufs(mount_point, devpth):
     """
     # dumpfs -m /
     # newfs command for / (/dev/label/rootfs)
-      newfs -O 2 -U -a 4 -b 32768 -d 32768 -e 4096 -f 4096 -g 16384
+      newfs -L rootf -O 2 -U -a 4 -b 32768 -d 32768 -e 4096 -f 4096 -g 16384
             -h 64 -i 8192 -j -k 6408 -m 8 -o time -s 58719232 /dev/label/rootf
     """
     cur_fs_sz = None
@@ -110,7 +110,7 @@ def _can_skip_resize_ufs(mount_point, devpth):
     for line in dumpfs_res.splitlines():
         if not line.startswith('#'):
             newfs_cmd = shlex.split(line)
-            opt_value = 'O:Ua:s:b:d:e:f:g:h:i:jk:m:o:'
+            opt_value = 'O:Ua:s:b:d:e:f:g:h:i:jk:m:o:L:'
             optlist, _args = getopt.getopt(newfs_cmd[1:], opt_value)
             for o, a in optlist:
                 if o == "-s":
@@ -197,6 +197,13 @@ def maybe_get_writable_device_path(devpath, info, log):
     if devpath.startswith('gpt/'):
         log.debug('We have a gpt label - just go ahead')
         return devpath
+    # Alternatively, our device could simply be a name as returned by gpart,
+    # such as da0p3
+    if not devpath.startswith('/dev/') and not os.path.exists(devpath):
+        fulldevpath = '/dev/' + devpath.lstrip('/')
+        log.debug("'%s' doesn't appear to be a valid device path. Trying '%s'",
+                  devpath, fulldevpath)
+        devpath = fulldevpath
 
     try:
         statret = os.stat(devpath)

@@ -1,3 +1,293 @@
+19.2:
+ - net: add rfc3442 (classless static routes) to EphemeralDHCP
+   (LP: #1821102)
+ - templates/ntp.conf.debian.tmpl: fix missing newline for pools
+   (LP: #1836598)
+ - Support netplan renderer in Arch Linux [Conrad Hoffmann]
+ - Fix typo in publicly viewable documentation. [David Medberry]
+ - Add a cdrom size checker for OVF ds to ds-identify
+   [Pengpeng Sun] (LP: #1806701)
+ - VMWare: Trigger the post customization script via cc_scripts module.
+   [Xiaofeng Wang] (LP: #1833192)
+ - Cloud-init analyze module: Added ability to analyze boot events.
+   [Sam Gilson]
+ - Update debian eni network configuration location, retain Ubuntu setting
+   [Janos Lenart]
+ - net: skip bond interfaces in get_interfaces
+   [Stanislav Makar] (LP: #1812857)
+ - Fix a couple of issues raised by a coverity scan
+ - Add missing dsname for Hetzner Cloud datasource [Markus Schade]
+ - doc: indicate that netplan is default in Ubuntu now
+ - azure: add region and AZ properties from imds compute location metadata
+ - sysconfig: support more bonding options [Penghui Liao]
+ - cloud-init-generator: use libexec path to ds-identify on redhat systems
+   (LP: #1833264)
+ - tools/build-on-freebsd: update to python3 [Gonéri Le Bouder]
+ - Allow identification of OpenStack by Asset Tag
+   [Mark T. Voelker] (LP: #1669875)
+ - Fix spelling error making 'an Ubuntu' consistent. [Brian Murray]
+ - run-container: centos: comment out the repo mirrorlist [Paride Legovini]
+ - netplan: update netplan key mappings for gratuitous-arp (LP: #1827238)
+ - freebsd: fix the name of cloudcfg VARIANT [Gonéri Le Bouder]
+ - freebsd: ability to grow root file system [Gonéri Le Bouder]
+ - freebsd: NoCloud data source support [Gonéri Le Bouder] (LP: #1645824)
+ - Azure: Return static fallback address as if failed to find endpoint
+   [Jason Zions (MSFT)]
+
+19.1:
+  - freebsd: add chpasswd pkg in the image [Gonéri Le Bouder]
+  - tests: add Eoan release [Paride Legovini]
+  - cc_mounts: check if mount -a on no-change fstab path
+    [Jason Zions (MSFT)] (LP: #1825596)
+  - replace remaining occurrences of LOG.warn [Daniel Watkins]
+  - DataSourceAzure: Adjust timeout for polling IMDS [Anh Vo]
+  - Azure: Changes to the Hyper-V KVP Reporter [Anh Vo]
+  - git tests: no longer show warning about safe yaml.
+  - tools/read-version: handle errors [Chad Miller]
+  - net/sysconfig: only indicate available on known sysconfig distros
+    (LP: #1819994)
+  - packages: update rpm specs for new bash completion path
+    [Daniel Watkins] (LP: #1825444)
+  - test_azure: mock util.SeLinuxGuard where needed
+    [Jason Zions (MSFT)] (LP: #1825253)
+  - setup.py: install bash completion script in new location [Daniel Watkins]
+  - mount_cb: do not pass sync and rw options to mount
+    [Gonéri Le Bouder] (LP: #1645824)
+  - cc_apt_configure: fix typo in apt documentation [Dominic Schlegel]
+  - Revert "DataSource: move update_events from a class to an instance..."
+    [Daniel Watkins]
+  - Change DataSourceNoCloud to ignore file system label's case.
+    [Risto Oikarinen]
+  - cmd:main.py: Fix missing 'modules-init' key in modes dict
+    [Antonio Romito] (LP: #1815109)
+  - ubuntu_advantage: rewrite cloud-config module
+  - Azure: Treat _unset network configuration as if it were absent
+    [Jason Zions (MSFT)] (LP: #1823084)
+  - DatasourceAzure: add additional logging for azure datasource [Anh Vo]
+  - cloud_tests: fix apt_pipelining test-cases
+  - Azure: Ensure platform random_seed is always serializable as JSON.
+    [Jason Zions (MSFT)]
+  - net/sysconfig: write out SUSE-compatible IPv6 config [Robert Schweikert]
+  - tox: Update testenv for openSUSE Leap to 15.0 [Thomas Bechtold]
+  - net: Fix ipv6 static routes when using eni renderer
+    [Raphael Glon] (LP: #1818669)
+  - Add ubuntu_drivers config module [Daniel Watkins]
+  - doc: Refresh Azure walinuxagent docs [Daniel Watkins]
+  - tox: bump pylint version to latest (2.3.1) [Daniel Watkins]
+  - DataSource: move update_events from a class to an instance attribute
+    [Daniel Watkins] (LP: #1819913)
+  - net/sysconfig: Handle default route setup for dhcp configured NICs
+    [Robert Schweikert] (LP: #1812117)
+  - DataSourceEc2: update RELEASE_BLOCKER to be more accurate
+    [Daniel Watkins]
+  - cloud-init-per: POSIX sh does not support string subst, use sed
+    (LP: #1819222)
+  - Support locking user with usermod if passwd is not available.
+  - Example for Microsoft Azure data disk added. [Anton Olifir]
+  - clean: correctly determine the path for excluding seed directory
+    [Daniel Watkins] (LP: #1818571)
+  - helpers/openstack: Treat unknown link types as physical
+    [Daniel Watkins] (LP: #1639263)
+  - drop Python 2.6 support and our NIH version detection [Daniel Watkins]
+  - tip-pylint: Fix assignment-from-return-none errors
+  - net: append type:dhcp[46] only if dhcp[46] is True in v2 netconfig
+    [Kurt Stieger] (LP: #1818032)
+  - cc_apt_pipelining: stop disabling pipelining by default
+    [Daniel Watkins] (LP: #1794982)
+  - tests: fix some slow tests and some leaking state [Daniel Watkins]
+  - util: don't determine string_types ourselves [Daniel Watkins]
+  - cc_rsyslog: Escape possible nested set [Daniel Watkins] (LP: #1816967)
+  - Enable encrypted_data_bag_secret support for Chef
+    [Eric Williams] (LP: #1817082)
+  - azure: Filter list of ssh keys pulled from fabric [Jason Zions (MSFT)]
+  - doc: update merging doc with fixes and some additional details/examples
+  - tests: integration test failure summary to use traceback if empty error
+  - This is to fix https://bugs.launchpad.net/cloud-init/+bug/1812676
+    [Vitaly Kuznetsov]
+  - EC2: Rewrite network config on AWS Classic instances every boot
+    [Guilherme G. Piccoli] (LP: #1802073)
+  - netinfo: Adjust ifconfig output parsing for FreeBSD ipv6 entries
+    (LP: #1779672)
+  - netplan: Don't render yaml aliases when dumping netplan (LP: #1815051)
+  - add PyCharm IDE .idea/ path to .gitignore [Dominic Schlegel]
+  - correct grammar issue in instance metadata documentation
+    [Dominic Schlegel] (LP: #1802188)
+  - clean: cloud-init clean should not trace when run from within cloud_dir
+    (LP: #1795508)
+  - Resolve flake8 comparison and pycodestyle over-ident issues
+    [Paride Legovini]
+  - opennebula: also exclude epochseconds from changed environment vars
+    (LP: #1813641)
+  - systemd: Render generator from template to account for system
+    differences. [Robert Schweikert]
+  - sysconfig: On SUSE, use STARTMODE instead of ONBOOT
+    [Robert Schweikert] (LP: #1799540)
+  - flake8: use ==/!= to compare str, bytes, and int literals
+    [Paride Legovini]
+  - opennebula: exclude EPOCHREALTIME as known bash env variable with a
+    delta (LP: #1813383)
+  - tox: fix disco httpretty dependencies for py37 (LP: #1813361)
+  - run-container: uncomment baseurl in yum.repos.d/*.repo when using a
+    proxy [Paride Legovini]
+  - lxd: install zfs-linux instead of zfs meta package
+    [Johnson Shi] (LP: #1799779)
+  - net/sysconfig: do not write a resolv.conf file with only the header.
+    [Robert Schweikert]
+  - net: Make sysconfig renderer compatible with Network Manager.
+    [Eduardo Otubo]
+  - cc_set_passwords: Fix regex when parsing hashed passwords
+    [Marlin Cremers] (LP: #1811446)
+  - net: Wait for dhclient to daemonize before reading lease file
+    [Jason Zions] (LP: #1794399)
+  - [Azure] Increase retries when talking to Wireserver during metadata walk
+    [Jason Zions]
+  - Add documentation on adding a datasource.
+  - doc: clean up some datasource documentation.
+  - ds-identify: fix wrong variable name in ovf_vmware_transport_guestinfo.
+  - Scaleway: Support ssh keys provided inside an instance tag. [PORTE Loïc]
+  - OVF: simplify expected return values of transport functions.
+  - Vmware: Add support for the com.vmware.guestInfo OVF transport.
+    (LP: #1807466)
+  - HACKING.rst: change contact info to Josh Powers
+  - Update to pylint 2.2.2.
+
+18.5:
+ - tests: add Disco release [Joshua Powers]
+ - net: render 'metric' values in per-subnet routes (LP: #1805871)
+ - write_files: add support for appending to files. [James Baxter]
+ - config: On ubuntu select cloud archive mirrors for armel, armhf, arm64.
+   (LP: #1805854)
+ - dhclient-hook: cleanups, tests and fix a bug on 'down' event.
+ - NoCloud: Allow top level 'network' key in network-config. (LP: #1798117)
+ - ovf: Fix ovf network config generation gateway/routes (LP: #1806103)
+ - azure: detect vnet migration via netlink media change event
+   [Tamilmani Manoharan]
+ - Azure: fix copy/paste error in error handling when reading azure ovf.
+   [Adam DePue]
+ - tests: fix incorrect order of mocks in test_handle_zfs_root.
+ - doc: Change dns_nameserver property to dns_nameservers. [Tomer Cohen]
+ - OVF: identify label iso9660 filesystems with label 'OVF ENV'.
+ - logs: collect-logs ignore instance-data-sensitive.json on non-root user
+   (LP: #1805201)
+ - net: Ephemeral*Network: add connectivity check via URL
+ - azure: _poll_imds only retry on 404. Fail on Timeout (LP: #1803598)
+ - resizefs: Prefix discovered devpath with '/dev/' when path does not
+   exist [Igor Galić]
+ - azure: retry imds polling on requests.Timeout (LP: #1800223)
+ - azure: Accept variation in error msg from mount for ntfs volumes
+   [Jason Zions] (LP: #1799338)
+ - azure: fix regression introduced when persisting ephemeral dhcp lease
+   [asakkurr]
+ - azure: add udev rules to create cloud-init Gen2 disk name symlinks
+   (LP: #1797480)
+ - tests: ec2 mock missing httpretty user-data and instance-identity routes
+ - azure: remove /etc/netplan/90-hotplug-azure.yaml when net from IMDS
+ - azure: report ready to fabric after reprovision and reduce logging
+   [asakkurr] (LP: #1799594)
+ - query: better error when missing read permission on instance-data
+ - instance-data: fallback to instance-data.json if sensitive is absent.
+   (LP: #1798189)
+ - docs: remove colon from network v1 config example. [Tomer Cohen]
+ - Add cloud-id binary to packages for SUSE [Jason Zions]
+ - systemd: On SUSE ensure cloud-init.service runs before wicked
+   [Robert Schweikert] (LP: #1799709)
+ - update detection of openSUSE variants [Robert Schweikert]
+ - azure: Add apply_network_config option to disable network from IMDS
+   (LP: #1798424)
+ - Correct spelling in an error message (udevadm). [Katie McLaughlin]
+ - tests: meta_data key changed to meta-data in ec2 instance-data.json
+   (LP: #1797231)
+ - tests: fix kvm integration test to assert flexible config-disk path
+   (LP: #1797199)
+ - tools: Add cloud-id command line utility
+ - instance-data: Add standard keys platform and subplatform. Refactor ec2.
+ - net: ignore nics that have "zero" mac address. (LP: #1796917)
+ - tests: fix apt_configure_primary to be more flexible
+ - Ubuntu: update sources.list to comment out deb-src entries. (LP: #74747)
+
+18.4:
+ - add rtd example docs about new standardized keys
+ - use ds._crawled_metadata instance attribute if set when writing
+   instance-data.json
+ - ec2: update crawled metadata. add standardized keys
+ - tests: allow skipping an entire cloud_test without running.
+ - tests: disable lxd tests on cosmic
+ - cii-tests: use unittest2.SkipTest in ntp_chrony due to new deps
+ - lxd: adjust to snap installed lxd.
+ - docs: surface experimental doc in instance-data.json
+ - tests: fix ec2 integration tests. process meta_data instead of meta-data
+ - Add support for Infiniband network interfaces (IPoIB). [Mark Goddard]
+ - cli: add cloud-init query subcommand to query instance metadata
+ - tools/tox-venv: update for new features.
+ - pylint: ignore warning assignment-from-no-return for _write_network
+ - stages: Fix bug causing datasource to have incorrect sys_cfg.
+   (LP: #1787459)
+ - Remove dead-code _write_network distro implementations.
+ - net_util: ensure static configs have netmask in translate_network result
+   [Thomas Berger] (LP: #1792454)
+ - Fall back to root:root on syslog permissions if other options fail.
+   [Robert Schweikert]
+ - tests: Add mock for util.get_hostname. [Robert Schweikert] (LP: #1792799)
+ - ds-identify: doc string cleanup.
+ - OpenStack: Support setting mac address on bond.
+   [Fabian Wiesel] (LP: #1682064)
+ - bash_completion/cloud-init: fix shell syntax error.
+ - EphemeralIPv4Network: Be more explicit when adding default route.
+   (LP: #1792415)
+ - OpenStack: support reading of newer versions of metdata.
+ - OpenStack: fix bug causing 'latest' version to be used from network.
+   (LP: #1792157)
+ - user-data: jinja template to render instance-data.json in cloud-config
+   (LP: #1791781)
+ - config: disable ssh access to a configured user account
+ - tests: print failed testname instead of docstring upon failure
+ - tests: Disallow use of util.subp except for where needed.
+ - sysconfig: refactor sysconfig to accept distro specific templates paths
+ - Add unit tests for config/cc_ssh.py [Francis Ginther]
+ - Fix the built-in cloudinit/tests/helpers:skipIf
+ - read-version: enhance error message [Joshua Powers]
+ - hyperv_reporting_handler: simplify threaded publisher
+ - VMWare: Fix a network config bug in vm with static IPv4 and no gateway.
+   [Pengpeng Sun] (LP: #1766538)
+ - logging: Add logging config type hyperv for reporting via Azure KVP
+   [Andy Liu]
+ - tests: disable other snap test as well [Joshua Powers]
+ - tests: disable snap, fix write_files binary [Joshua Powers]
+ - Add datasource Oracle Compute Infrastructure (OCI).
+ - azure: allow azure to generate network configuration from IMDS per boot.
+ - Scaleway: Add network configuration to the DataSource [Louis Bouchard]
+ - docs: Fix example cloud-init analyze command to match output.
+   [Wesley Gao]
+ - netplan: Correctly render macaddress on a bonds and bridges when
+   provided. (LP: #1784699)
+ - tools: Add 'net-convert' subcommand command to 'cloud-init devel'.
+ - redhat: remove ssh keys on new instance. (LP: #1781094)
+ - Use typeset or local in profile.d scripts. (LP: #1784713)
+ - OpenNebula: Fix null gateway6 [Akihiko Ota] (LP: #1768547)
+ - oracle: fix detect_openstack to report True on OracleCloud.com DMI data
+   (LP: #1784685)
+ - tests: improve LXDInstance trying to workaround or catch bug.
+ - update_metadata re-config on every boot comments and tests not quite
+   right [Mike Gerdts]
+ - tests: Collect build_info from system if available.
+ - pylint: Fix pylint warnings reported in pylint 2.0.0.
+ - get_linux_distro: add support for rhel via redhat-release.
+ - get_linux_distro: add support for centos6 and rawhide flavors of redhat
+   (LP: #1781229)
+ - tools: add '--debug' to tools/net-convert.py
+ - tests: bump the version of paramiko to 2.4.1.
+ - docs: note in rtd about avoiding /tmp when writing files (LP: #1727876)
+ - ubuntu,centos,debian: get_linux_distro to align with platform.dist
+   (LP: #1780481)
+ - Fix boothook docs on environment variable name (INSTANCE_I ->
+   INSTANCE_ID) [Marc Tamsky]
+ - update_metadata: a datasource can support network re-config every boot
+ - tests: drop salt-minion integration test (LP: #1778737)
+ - Retry on failed import of gpg receive keys.
+ - tools: Fix run-container when neither source or binary package requested.
+ - docs: Fix a small spelling error. [Oz N Tiram]
+ - tox: use simplestreams from git repository rather than bzr.
+
 18.3:
  - docs: represent sudo:false in docs for user_groups config module
  - Explicitly prevent `sudo` access for user module

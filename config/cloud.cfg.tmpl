@@ -24,8 +24,6 @@ disable_root: true
 {% if variant in ["centos", "fedora", "rhel"] %}
 mount_default_fields: [~, ~, 'auto', 'defaults,nofail', '0', '2']
 resize_rootfs_tmp: /dev
-ssh_deletekeys:   0
-ssh_genkeytypes:  ~
 ssh_pwauth:   0
 
 {% endif %}
@@ -34,8 +32,8 @@ preserve_hostname: false
 
 {% if variant in ["freebsd"] %}
 # This should not be required, but leave it in place until the real cause of
-# not beeing able to find -any- datasources is resolved.
-datasource_list: ['ConfigDrive', 'Azure', 'OpenStack', 'Ec2']
+# not finding -any- datasources is resolved.
+datasource_list: ['NoCloud', 'ConfigDrive', 'Azure', 'OpenStack', 'Ec2']
 {% endif %}
 # Example datasource config
 # datasource:
@@ -114,6 +112,9 @@ cloud_final_modules:
  - landscape
  - lxd
 {% endif %}
+{% if variant in ["ubuntu", "unknown"] %}
+ - ubuntu-drivers
+{% endif %}
 {% if variant not in ["freebsd"] %}
  - puppet
  - chef
@@ -169,7 +170,17 @@ system_info:
            - http://%(availability_zone)s.clouds.archive.ubuntu.com/ubuntu/
            - http://%(region)s.clouds.archive.ubuntu.com/ubuntu/
          security: []
-     - arches: [armhf, armel, default]
+     - arches: [arm64, armel, armhf]
+       failsafe:
+         primary: http://ports.ubuntu.com/ubuntu-ports
+         security: http://ports.ubuntu.com/ubuntu-ports
+       search:
+         primary:
+           - http://%(ec2_region)s.ec2.ports.ubuntu.com/ubuntu-ports/
+           - http://%(availability_zone)s.clouds.ports.ubuntu.com/ubuntu-ports/
+           - http://%(region)s.clouds.ports.ubuntu.com/ubuntu-ports/
+         security: []
+     - arches: [default]
        failsafe:
          primary: http://ports.ubuntu.com/ubuntu-ports
          security: http://ports.ubuntu.com/ubuntu-ports

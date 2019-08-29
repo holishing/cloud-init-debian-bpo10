@@ -2,14 +2,16 @@
 
 import copy
 import errno
+import httpretty
 import mock
 import os
+import requests
 import textwrap
-import yaml
 
 import cloudinit.net as net
 from cloudinit.util import ensure_file, write_file, ProcessExecutionError
-from cloudinit.tests.helpers import CiTestCase
+from cloudinit.tests.helpers import CiTestCase, HttprettyTestCase
+from cloudinit import safeyaml as yaml
 
 
 class TestSysDevPath(CiTestCase):
@@ -199,6 +201,8 @@ class TestGenerateFallbackConfig(CiTestCase):
         self.sysdir = self.tmp_dir() + '/'
         self.m_sys_path.return_value = self.sysdir
         self.addCleanup(sys_mock.stop)
+        self.add_patch('cloudinit.net.util.is_container', 'm_is_container',
+                       return_value=False)
         self.add_patch('cloudinit.net.util.udevadm_settle', 'm_settle')
 
     def test_generate_fallback_finds_connected_eth_with_mac(self):
@@ -456,6 +460,22 @@ class TestEphemeralIPV4Network(CiTestCase):
             self.assertEqual(expected_setup_calls, m_subp.call_args_list)
         m_subp.assert_has_calls(expected_teardown_calls)
 
+    @mock.patch('cloudinit.net.readurl')
+    def test_ephemeral_ipv4_no_network_if_url_connectivity(
+            self, m_readurl, m_subp):
+        """No network setup is performed if we can successfully connect to
+        connectivity_url."""
+        params = {
+            'interface': 'eth0', 'ip': '192.168.2.2',
+            'prefix_or_mask': '255.255.255.0', 'broadcast': '192.168.2.255',
+            'connectivity_url': 'http://example.org/index.html'}
+
+        with net.EphemeralIPv4Network(**params):
+            self.assertEqual([mock.call('http://example.org/index.html',
+                                        timeout=5)], m_readurl.call_args_list)
+        # Ensure that no teardown happens:
+        m_subp.assert_has_calls([])
+
     def test_ephemeral_ipv4_network_noop_when_configured(self, m_subp):
         """EphemeralIPv4Network handles exception when address is setup.
 
@@ -513,16 +533,60 @@ class TestEphemeralIPV4Network(CiTestCase):
                 capture=True),
             mock.call(
                 ['ip', 'route', 'show', '0.0.0.0/0'], capture=True),
+            mock.call(['ip', '-4', 'route', 'add', '192.168.2.1',
+                       'dev', 'eth0', 'src', '192.168.2.2'], capture=True),
             mock.call(
                 ['ip', '-4', 'route', 'add', 'default', 'via',
                  '192.168.2.1', 'dev', 'eth0'], capture=True)]
-        expected_teardown_calls = [mock.call(
-            ['ip', '-4', 'route', 'del', 'default', 'dev', 'eth0'],
-            capture=True)]
+        expected_teardown_calls = [
+            mock.call(['ip', '-4', 'route', 'del', 'default', 'dev', 'eth0'],
+                      capture=True),
+            mock.call(['ip', '-4', 'route', 'del', '192.168.2.1',
+                       'dev', 'eth0', 'src', '192.168.2.2'], capture=True),
+        ]
 
         with net.EphemeralIPv4Network(**params):
             self.assertEqual(expected_setup_calls, m_subp.call_args_list)
         m_subp.assert_has_calls(expected_teardown_calls)
+
+    def test_ephemeral_ipv4_network_with_rfc3442_static_routes(self, m_subp):
+        params = {
+            'interface': 'eth0', 'ip': '192.168.2.2',
+            'prefix_or_mask': '255.255.255.0', 'broadcast': '192.168.2.255',
+            'static_routes': [('169.254.169.254/32', '192.168.2.1'),
+                              ('0.0.0.0/0', '192.168.2.1')],
+            'router': '192.168.2.1'}
+        expected_setup_calls = [
+            mock.call(
+                ['ip', '-family', 'inet', 'addr', 'add', '192.168.2.2/24',
+                 'broadcast', '192.168.2.255', 'dev', 'eth0'],
+                capture=True, update_env={'LANG': 'C'}),
+            mock.call(
+                ['ip', '-family', 'inet', 'link', 'set', 'dev', 'eth0', 'up'],
+                capture=True),
+            mock.call(
+                ['ip', '-4', 'route', 'add', '169.254.169.254/32',
+                 'via', '192.168.2.1', 'dev', 'eth0'], capture=True),
+            mock.call(
+                ['ip', '-4', 'route', 'add', '0.0.0.0/0',
+                 'via', '192.168.2.1', 'dev', 'eth0'], capture=True)]
+        expected_teardown_calls = [
+            mock.call(
+                ['ip', '-4', 'route', 'del', '0.0.0.0/0',
+                 'via', '192.168.2.1', 'dev', 'eth0'], capture=True),
+            mock.call(
+                ['ip', '-4', 'route', 'del', '169.254.169.254/32',
+                 'via', '192.168.2.1', 'dev', 'eth0'], capture=True),
+            mock.call(
+                ['ip', '-family', 'inet', 'link', 'set', 'dev',
+                 'eth0', 'down'], capture=True),
+            mock.call(
+                ['ip', '-family', 'inet', 'addr', 'del',
+                 '192.168.2.2/24', 'dev', 'eth0'], capture=True)
+        ]
+        with net.EphemeralIPv4Network(**params):
+            self.assertEqual(expected_setup_calls, m_subp.call_args_list)
+        m_subp.assert_has_calls(expected_setup_calls + expected_teardown_calls)
 
 
 class TestApplyNetworkCfgNames(CiTestCase):
@@ -612,3 +676,35 @@ class TestApplyNetworkCfgNames(CiTestCase):
     def test_apply_v2_renames_raises_runtime_error_on_unknown_version(self):
         with self.assertRaises(RuntimeError):
             net.apply_network_config_names(yaml.load("version: 3"))
+
+
+class TestHasURLConnectivity(HttprettyTestCase):
+
+    def setUp(self):
+        super(TestHasURLConnectivity, self).setUp()
+        self.url = 'http://fake/'
+        self.kwargs = {'allow_redirects': True, 'timeout': 5.0}
+
+    @mock.patch('cloudinit.net.readurl')
+    def test_url_timeout_on_connectivity_check(self, m_readurl):
+        """A timeout of 5 seconds is provided when reading a url."""
+        self.assertTrue(
+            net.has_url_connectivity(self.url), 'Expected True on url connect')
+
+    def test_true_on_url_connectivity_success(self):
+        httpretty.register_uri(httpretty.GET, self.url)
+        self.assertTrue(
+            net.has_url_connectivity(self.url), 'Expected True on url connect')
+
+    @mock.patch('requests.Session.request')
+    def test_true_on_url_connectivity_timeout(self, m_request):
+        """A timeout raised accessing the url will return False."""
+        m_request.side_effect = requests.Timeout('Fake Connection Timeout')
+        self.assertFalse(
+            net.has_url_connectivity(self.url),
+            'Expected False on url timeout')
+
+    def test_true_on_url_connectivity_failure(self):
+        httpretty.register_uri(httpretty.GET, self.url, body={}, status=404)
+        self.assertFalse(
+            net.has_url_connectivity(self.url), 'Expected False on url fail')
