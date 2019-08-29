@@ -17,99 +17,10 @@ own way) internally a datasource abstract class was created to allow for a
 single way to access the different cloud systems methods to provide this data
 through the typical usage of subclasses.
 
-
-instance-data
--------------
-For reference, cloud-init stores all the metadata, vendordata and userdata
-provided by a cloud in a json blob at ``/run/cloud-init/instance-data.json``.
-While the json contains datasource-specific keys and names, cloud-init will
-maintain a minimal set of standardized keys that will remain stable on any
-cloud. Standardized instance-data keys will be present under a "v1" key.
-Any datasource metadata cloud-init consumes will all be present under the
-"ds" key.
-
-Below is an instance-data.json example from an OpenStack instance:
-
-.. sourcecode:: json
-
-  {
-   "base64-encoded-keys": [
-    "ds/meta-data/random_seed",
-    "ds/user-data"
-   ],
-   "ds": {
-    "ec2_metadata": {
-     "ami-id": "ami-0000032f",
-     "ami-launch-index": "0",
-     "ami-manifest-path": "FIXME",
-     "block-device-mapping": {
-      "ami": "vda",
-      "ephemeral0": "/dev/vdb",
-      "root": "/dev/vda"
-     },
-     "hostname": "xenial-test.novalocal",
-     "instance-action": "none",
-     "instance-id": "i-0006e030",
-     "instance-type": "m1.small",
-     "local-hostname": "xenial-test.novalocal",
-     "local-ipv4": "10.5.0.6",
-     "placement": {
-      "availability-zone": "None"
-     },
-     "public-hostname": "xenial-test.novalocal",
-     "public-ipv4": "10.245.162.145",
-     "reservation-id": "r-fxm623oa",
-     "security-groups": "default"
-    },
-    "meta-data": {
-     "availability_zone": null,
-     "devices": [],
-     "hostname": "xenial-test.novalocal",
-     "instance-id": "3e39d278-0644-4728-9479-678f9212d8f0",
-     "launch_index": 0,
-     "local-hostname": "xenial-test.novalocal",
-     "name": "xenial-test",
-     "project_id": "e0eb2d2538814...",
-     "random_seed": "A6yPN...",
-     "uuid": "3e39d278-0644-4728-9479-678f92..."
-    },
-    "network_json": {
-     "links": [
-      {
-       "ethernet_mac_address": "fa:16:3e:7d:74:9b",
-       "id": "tap9ca524d5-6e",
-       "mtu": 8958,
-       "type": "ovs",
-       "vif_id": "9ca524d5-6e5a-4809-936a-6901..."
-      }
-     ],
-     "networks": [
-      {
-       "id": "network0",
-       "link": "tap9ca524d5-6e",
-       "network_id": "c6adfc18-9753-42eb-b3ea-18b57e6b837f",
-       "type": "ipv4_dhcp"
-      }
-     ],
-     "services": [
-      {
-       "address": "10.10.160.2",
-       "type": "dns"
-      }
-     ]
-    },
-    "user-data": "I2Nsb3VkLWNvbmZpZ...",
-    "vendor-data": null
-   },
-   "v1": {
-    "availability-zone": null,
-    "cloud-name": "openstack",
-    "instance-id": "3e39d278-0644-4728-9479-678f9212d8f0",
-    "local-hostname": "xenial-test",
-    "region": null
-   }
-  }
-
+Any metadata processed by cloud-init's datasources is persisted as
+``/run/cloud-init/instance-data.json``. Cloud-init provides tooling
+to quickly introspect some of that data. See :ref:`instance_metadata` for
+more information.
 
 
 Datasource API
@@ -149,14 +60,14 @@ The current interface that a datasource object must provide is the following:
     # or does not exist)
     def device_name_to_device(self, name)
 
-    # gets the locale string this instance should be applying 
+    # gets the locale string this instance should be applying
     # which typically used to adjust the instances locale settings files
     def get_locale(self)
 
     @property
     def availability_zone(self)
 
-    # gets the instance id that was assigned to this instance by the 
+    # gets the instance id that was assigned to this instance by the
     # cloud provider or when said instance id does not exist in the backing
     # metadata this will return 'iid-datasource'
     def get_instance_id(self)
@@ -167,6 +78,65 @@ The current interface that a datasource object must provide is the following:
     def get_hostname(self, fqdn=False)
 
     def get_package_mirror_info(self)
+
+
+Adding a new Datasource
+-----------------------
+The datasource objects have a few touch points with cloud-init.  If you
+are interested in adding a new datasource for your cloud platform you'll
+need to take care of the following items:
+
+* **Identify a mechanism for positive identification of the platform**:
+  It is good practice for a cloud platform to positively identify itself
+  to the guest.  This allows the guest to make educated decisions based
+  on the platform on which it is running. On the x86 and arm64 architectures,
+  many clouds identify themselves through DMI data.  For example,
+  Oracle's public cloud provides the string 'OracleCloud.com' in the
+  DMI chassis-asset field.
+
+  cloud-init enabled images produce a log file with details about the
+  platform.  Reading through this log in ``/run/cloud-init/ds-identify.log``
+  may provide the information needed to uniquely identify the platform.
+  If the log is not present, you can generate it by running from source
+  ``./tools/ds-identify`` or the installed location
+  ``/usr/lib/cloud-init/ds-identify``.
+
+  The mechanism used to identify the platform will be required for the
+  ds-identify and datasource module sections below.
+
+* **Add datasource module ``cloudinit/sources/DataSource<CloudPlatform>.py``**:
+  It is suggested that you start by copying one of the simpler datasources
+  such as DataSourceHetzner.
+
+* **Add tests for datasource module**:
+  Add a new file with some tests for the module to
+  ``cloudinit/sources/test_<yourplatform>.py``.  For example see
+  ``cloudinit/sources/tests/test_oracle.py``
+
+* **Update ds-identify**:  In systemd systems, ds-identify is used to detect
+  which datasource should be enabled or if cloud-init should run at all.
+  You'll need to make changes to ``tools/ds-identify``.
+
+* **Add tests for ds-identify**: Add relevant tests in a new class to
+  ``tests/unittests/test_ds_identify.py``.  You can use ``TestOracle`` as an
+  example.
+
+* **Add your datasource name to the builtin list of datasources:** Add
+  your datasource module name to the end of the ``datasource_list``
+  entry in ``cloudinit/settings.py``.
+
+* **Add your your cloud platform to apport collection prompts:** Update the
+  list of cloud platforms in ``cloudinit/apport.py``.  This list will be
+  provided to the user who invokes ``ubuntu-bug cloud-init``.
+
+* **Enable datasource by default in ubuntu packaging branches:**
+  Ubuntu packaging branches contain a template file
+  ``debian/cloud-init.templates`` that ultimately sets the default
+  datasource_list when installed via package.  This file needs updating when
+  the commit gets into a package.
+
+* **Add documentation for your datasource**: You should add a new
+  file in ``doc/datasources/<cloudplatform>.rst``
 
 
 Datasource Documentation
@@ -189,6 +159,7 @@ Follow for more information.
    datasources/nocloud.rst
    datasources/opennebula.rst
    datasources/openstack.rst
+   datasources/oracle.rst
    datasources/ovf.rst
    datasources/smartos.rst
    datasources/fallback.rst

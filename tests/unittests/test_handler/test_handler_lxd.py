@@ -43,12 +43,12 @@ class TestLxd(t_help.CiTestCase):
         self.assertTrue(mock_util.which.called)
         # no bridge config, so maybe_cleanup should not be called.
         self.assertFalse(m_maybe_clean.called)
-        init_call = mock_util.subp.call_args_list[0][0][0]
-        self.assertEqual(init_call,
-                         ['lxd', 'init', '--auto',
-                          '--network-address=0.0.0.0',
-                          '--storage-backend=zfs',
-                          '--storage-pool=poolname'])
+        self.assertEqual(
+            [mock.call(['lxd', 'waitready', '--timeout=300']),
+             mock.call(
+                 ['lxd', 'init', '--auto', '--network-address=0.0.0.0',
+                  '--storage-backend=zfs', '--storage-pool=poolname'])],
+            mock_util.subp.call_args_list)
 
     @mock.patch("cloudinit.config.cc_lxd.maybe_cleanup_default")
     @mock.patch("cloudinit.config.cc_lxd.util")
@@ -62,7 +62,7 @@ class TestLxd(t_help.CiTestCase):
         cc_lxd.handle('cc_lxd', self.lxd_cfg, cc, self.logger, [])
         self.assertFalse(m_maybe_clean.called)
         install_pkg = cc.distro.install_packages.call_args_list[0][0][0]
-        self.assertEqual(sorted(install_pkg), ['lxd', 'zfs'])
+        self.assertEqual(sorted(install_pkg), ['lxd', 'zfsutils-linux'])
 
     @mock.patch("cloudinit.config.cc_lxd.maybe_cleanup_default")
     @mock.patch("cloudinit.config.cc_lxd.util")

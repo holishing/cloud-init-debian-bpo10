@@ -7,7 +7,7 @@
 from base64 import b64decode
 import re
 
-from cloudinit.cs_utils import Cepko
+from cloudinit.cs_utils import Cepko, SERIAL_PORT
 
 from cloudinit import log as logging
 from cloudinit import sources
@@ -42,12 +42,8 @@ class DataSourceCloudSigma(sources.DataSource):
         if not sys_product_name:
             LOG.debug("system-product-name not available in dmi data")
             return False
-        else:
-            LOG.debug("detected hypervisor as %s", sys_product_name)
-            return 'cloudsigma' in sys_product_name.lower()
-
-        LOG.warning("failed to query dmi data for system product name")
-        return False
+        LOG.debug("detected hypervisor as %s", sys_product_name)
+        return 'cloudsigma' in sys_product_name.lower()
 
     def _get_data(self):
         """
@@ -83,6 +79,10 @@ class DataSourceCloudSigma(sources.DataSource):
         self.ssh_public_key = server_meta['ssh_public_key']
 
         return True
+
+    def _get_subplatform(self):
+        """Return the subplatform metadata source details."""
+        return 'cepko (%s)' % SERIAL_PORT
 
     def get_hostname(self, fqdn=False, resolve_ip=False, metadata_only=False):
         """

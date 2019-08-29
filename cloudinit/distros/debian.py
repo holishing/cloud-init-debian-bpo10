@@ -36,14 +36,14 @@ ENI_HEADER = """# This file is generated from information provided by
 # network: {config: disabled}
 """
 
-NETWORK_CONF_FN = "/etc/network/interfaces.d/50-cloud-init.cfg"
+NETWORK_CONF_FN = "/etc/network/interfaces.d/50-cloud-init"
 LOCALE_CONF_FN = "/etc/default/locale"
 
 
 class Distro(distros.Distro):
     hostname_conf_fn = "/etc/hostname"
     network_conf_fn = {
-        "eni": "/etc/network/interfaces.d/50-cloud-init.cfg",
+        "eni": "/etc/network/interfaces.d/50-cloud-init",
         "netplan": "/etc/netplan/50-cloud-init.yaml"
     }
     renderer_configs = {
@@ -108,11 +108,6 @@ class Distro(distros.Distro):
     def install_packages(self, pkglist):
         self.update_package_sources()
         self.package_command('install', pkgs=pkglist)
-
-    def _write_network(self, settings):
-        # this is a legacy method, it will always write eni
-        util.write_file(self.network_conf_fn["eni"], settings)
-        return ['all']
 
     def _write_network_config(self, netconfig):
         _maybe_remove_legacy_eth0()

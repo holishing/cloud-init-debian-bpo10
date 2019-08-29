@@ -17,10 +17,13 @@ from cloudinit.settings import (
 from cloudinit import handlers
 
 # Default handlers (used if not overridden)
-from cloudinit.handlers import boot_hook as bh_part
-from cloudinit.handlers import cloud_config as cc_part
-from cloudinit.handlers import shell_script as ss_part
-from cloudinit.handlers import upstart_job as up_part
+from cloudinit.handlers.boot_hook import BootHookPartHandler
+from cloudinit.handlers.cloud_config import CloudConfigPartHandler
+from cloudinit.handlers.jinja_template import JinjaTemplatePartHandler
+from cloudinit.handlers.shell_script import ShellScriptPartHandler
+from cloudinit.handlers.upstart_job import UpstartJobPartHandler
+
+from cloudinit.event import EventType
 
 from cloudinit import cloud
 from cloudinit import config
@@ -85,7 +88,7 @@ class Init(object):
             # from whatever it was to a new set...
             if self.datasource is not NULL_DATA_SOURCE:
                 self.datasource.distro = self._distro
-                self.datasource.sys_cfg = system_config
+                self.datasource.sys_cfg = self.cfg
         return self._distro
 
     @property
@@ -411,12 +414,17 @@ class Init(object):
             'datasource': self.datasource,
         })
         # TODO(harlowja) Hmmm, should we dynamically import these??
+        cloudconfig_handler = CloudConfigPartHandler(**opts)
+        shellscript_handler = ShellScriptPartHandler(**opts)
         def_handlers = [
-            cc_part.CloudConfigPartHandler(**opts),
-            ss_part.ShellScriptPartHandler(**opts),
-            bh_part.BootHookPartHandler(**opts),
-            up_part.UpstartJobPartHandler(**opts),
+            cloudconfig_handler,
+            shellscript_handler,
+            BootHookPartHandler(**opts),
+            UpstartJobPartHandler(**opts),
         ]
+        opts.update(
+            {'sub_handlers': [cloudconfig_handler, shellscript_handler]})
+        def_handlers.append(JinjaTemplatePartHandler(**opts))
         return def_handlers
 
     def _default_userdata_handlers(self):
@@ -508,7 +516,7 @@ class Init(object):
                 # The default frequency if handlers don't have one
                 'frequency': frequency,
                 # This will be used when new handlers are found
-                # to help write there contents to files with numbered
+                # to help write their contents to files with numbered
                 # names...
                 'handlercount': 0,
                 'excluded': excluded,
@@ -540,11 +548,11 @@ class Init(object):
         with events.ReportEventStack("consume-user-data",
                                      "reading and applying user-data",
                                      parent=self.reporter):
-                self._consume_userdata(frequency)
+            self._consume_userdata(frequency)
         with events.ReportEventStack("consume-vendor-data",
                                      "reading and applying vendor-data",
                                      parent=self.reporter):
-                self._consume_vendordata(frequency)
+            self._consume_vendordata(frequency)
 
         # Perform post-consumption adjustments so that
         # modules that run during the init stage reflect
@@ -648,10 +656,14 @@ class Init(object):
         except Exception as e:
             LOG.warning("Failed to rename devices: %s", e)
 
-        if (self.datasource is not NULL_DATA_SOURCE and
-                not self.is_new_instance()):
-            LOG.debug("not a new instance. network config is not applied.")
-            return
+        if self.datasource is not NULL_DATA_SOURCE:
+            if not self.is_new_instance():
+                if not self.datasource.update_metadata([EventType.BOOT]):
+                    LOG.debug(
+                        "No network config applied. Neither a new instance"
+                        " nor datasource network update on '%s' event",
+                        EventType.BOOT)
+                    return
 
         LOG.info("Applying network configuration from %s bringup=%s: %s",
                  src, bring_up, netcfg)
