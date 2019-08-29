@@ -5,6 +5,9 @@ cloud-init (19.2-1) unstable; urgency=medium
     applied upstream.
   * Drop CVE-2019-0816_Filter_list_of_ssh_keys_pulled_from_fabric.patch also
     applied upstream.
+  * Rebased patches:
+    - 0009-Drop-all-unused-extended-version-handling.patch
+    - 0012-Fix-message-when-a-local-is-missing.patch
 
  -- Thomas Goirand <zigo@debian.org>  Thu, 29 Aug 2019 08:47:15 +0200
 

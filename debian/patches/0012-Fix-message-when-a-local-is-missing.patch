@@ -10,13 +10,12 @@ diff --git a/tools/Z99-cloud-locale-test.sh b/tools/Z99-cloud-locale-test.sh
 index 4978d87..cb414b5 100644
 --- a/tools/Z99-cloud-locale-test.sh
 +++ b/tools/Z99-cloud-locale-test.sh
-@@ -52,39 +52,10 @@ locale_warn() {
-     printf " The unknown environment variables are:\n   %s\n" "$bad_kv"
+@@ -56,38 +56,10 @@
      printf " This can affect your user experience significantly, including the\n"
      printf " ability to manage packages. You may install the locales by running:\n\n"
--
--    local bad invalid="" to_gen="" sfile="/usr/share/i18n/SUPPORTED"
--    local pkgs=""
+ 
+-    $_local bad invalid="" to_gen="" sfile="/usr/share/i18n/SUPPORTED"
+-    $_local local pkgs=""
 -    if [ -e "$sfile" ]; then
 -        for bad in ${bad_lcs}; do
 -            grep -q -i "${bad}" "$sfile" &&
@@ -29,7 +28,7 @@ index 4978d87..cb414b5 100644
 -    fi
 -    to_gen=${to_gen# }
 -
--    local pkgs=""
+-    $_local pkgs=""
 -    for bad in ${to_gen}; do
 -        pkgs="${pkgs} language-pack-${bad%%_*}"
 -    done

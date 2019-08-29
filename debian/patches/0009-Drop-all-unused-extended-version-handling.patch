@@ -1,16 +1,13 @@
-From: Bastian Blank <waldi@debian.org>
+Description: Drop all unused extended version handling
+Author: Bastian Blank <waldi@debian.org>
 Date: Sun, 4 Dec 2016 12:13:49 +0100
-Subject: Drop all unused extended version handling
-
----
- tools/read-version | 25 +++----------------------
- 1 file changed, 3 insertions(+), 22 deletions(-)
+Last-Update: 2019-08-29
 
 diff --git a/tools/read-version b/tools/read-version
 index 3ea9e66..a8d3484 100755
 --- a/tools/read-version
 +++ b/tools/read-version
-@@ -62,27 +62,9 @@ use_long = '--long' in sys.argv or os.environ.get('CI_RV_LONG')
+@@ -62,36 +62,9 @@
  use_tags = '--tags' in sys.argv or os.environ.get('CI_RV_TAGS')
  output_json = '--json' in sys.argv
  
@@ -24,11 +21,20 @@ index 3ea9e66..a8d3484 100755
 -        flags = ['--tags']
 -    cmd = ['git', 'describe', '--abbrev=8', '--match=[0-9]*'] + flags
 -
--    version = tiny_p(cmd).strip()
+-    try:
+-        version = tiny_p(cmd).strip()
+-    except RuntimeError:
+-        version = None
 -
--    if not version.startswith(src_version):
+-    if version is None or not version.startswith(src_version):
 -        sys.stderr.write("git describe version (%s) differs from "
 -                         "cloudinit.version (%s)\n" % (version, src_version))
+-        sys.stderr.write(
+-            "Please get the latest upstream tags.\n"
+-            "As an example, this can be done with the following:\n"
+-            "$ git remote add upstream https://git.launchpad.net/cloud-init\n"
+-            "$ git fetch upstream --tags\n"
+-        )
 -        sys.exit(1)
 -
 -    version_long = tiny_p(cmd + ["--long"]).strip()
@@ -39,7 +45,7 @@ index 3ea9e66..a8d3484 100755
  # version is X.Y.Z[+xxx.gHASH]
  # version_long is None or X.Y.Z-xxx-gHASH
  release = version.partition("-")[0]
-@@ -91,9 +73,8 @@ commit = None
+@@ -100,9 +73,8 @@
  distance = None
  
  if version_long:
