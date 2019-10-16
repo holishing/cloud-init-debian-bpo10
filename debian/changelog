@@ -1,3 +1,10 @@
+cloud-init (19.2-3) unstable; urgency=medium
+
+  * Remove the patch for sources.list, and activate the option to preserve
+    the sources.list by default (ie: apt_preserve_sources_list: true).
+
+ -- Thomas Goirand <zigo@debian.org>  Wed, 16 Oct 2019 21:44:00 +0200
+
 cloud-init (19.2-2) unstable; urgency=medium
 
   * Comment out backports by default in apt/sources.list.
