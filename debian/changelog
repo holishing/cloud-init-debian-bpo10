@@ -1,3 +1,9 @@
+cloud-init (19.2-2) unstable; urgency=medium
+
+  * Comment out backports by default in apt/sources.list.
+
+ -- Thomas Goirand <zigo@debian.org>  Wed, 16 Oct 2019 20:55:55 +0200
+
 cloud-init (19.2-1) unstable; urgency=medium
 
   * New upstream release.
