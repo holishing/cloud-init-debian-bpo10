@@ -16,7 +16,7 @@ Build-Depends:
  python3-all,
  python3-setuptools,
 Build-Depends-Indep:
- python-pyflakes,
+ python3-pyflakes,
  python3-configobj,
  python3-contextlib2,
  python3-httpretty (>= 0.9.5),

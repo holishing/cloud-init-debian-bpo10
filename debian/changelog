@@ -1,3 +1,9 @@
+cloud-init (19.2-4) unstable; urgency=medium
+
+  * Removed the last bit of Python2 build-depends (Closes: #942968).
+
+ -- Thomas Goirand <zigo@debian.org>  Wed, 23 Oct 2019 12:19:08 +0200
+
 cloud-init (19.2-3) unstable; urgency=medium
 
   * Remove the patch for sources.list, and activate the option to preserve
