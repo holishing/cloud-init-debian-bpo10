@@ -22,7 +22,9 @@ KNOWN_CLOUD_NAMES = [
     'CloudSigma',
     'CloudStack',
     'DigitalOcean',
+    'E24Cloud',
     'GCE - Google Compute Engine',
+    'Exoscale',
     'Hetzner Cloud',
     'IBM - (aka SoftLayer or BlueMix)',
     'LXD',
@@ -36,6 +38,7 @@ KNOWN_CLOUD_NAMES = [
     'Scaleway',
     'SmartOS',
     'VMware',
+    'ZStack',
     'Other']
 
 # Potentially clear text collected logs
