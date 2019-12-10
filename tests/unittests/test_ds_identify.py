@@ -195,6 +195,10 @@ class DsIdentifyBase(CiTestCase):
         return self._check_via_dict(
             data, RC_FOUND, dslist=[data.get('ds'), DS_NONE])
 
+    def _test_ds_not_found(self, name):
+        data = copy.deepcopy(VALID_CFG[name])
+        return self._check_via_dict(data, RC_NOT_FOUND)
+
     def _check_via_dict(self, data, rc, dslist=None, **kwargs):
         ret = self._call_via_dict(data, **kwargs)
         good = False
@@ -244,8 +248,12 @@ class TestDsIdentify(DsIdentifyBase):
         self._test_ds_found('Ec2-xen')
 
     def test_brightbox_is_ec2(self):
-        """EC2: product_serial ends with 'brightbox.com'"""
+        """EC2: product_serial ends with '.brightbox.com'"""
         self._test_ds_found('Ec2-brightbox')
+
+    def test_bobrightbox_is_not_brightbox(self):
+        """EC2: bobrightbox.com in product_serial is not brightbox'"""
+        self._test_ds_not_found('Ec2-brightbox-negative')
 
     def test_gce_by_product_name(self):
         """GCE identifies itself with product_name."""
@@ -259,10 +267,13 @@ class TestDsIdentify(DsIdentifyBase):
         """ConfigDrive datasource has a disk with LABEL=config-2."""
         self._test_ds_found('ConfigDrive')
 
+    def test_rbx_cloud(self):
+        """Rbx datasource has a disk with LABEL=CLOUDMD."""
+        self._test_ds_found('RbxCloud')
+
     def test_config_drive_upper(self):
         """ConfigDrive datasource has a disk with LABEL=CONFIG-2."""
         self._test_ds_found('ConfigDriveUpper')
-        return
 
     def test_config_drive_seed(self):
         """Config Drive seed directory."""
@@ -601,6 +612,18 @@ class TestDsIdentify(DsIdentifyBase):
         self.assertEqual(expected, [p for p in expected if p in toks],
                          "path did not have expected tokens")
 
+    def test_zstack_is_ec2(self):
+        """EC2: chassis asset tag ends with 'zstack.io'"""
+        self._test_ds_found('Ec2-ZStack')
+
+    def test_e24cloud_is_ec2(self):
+        """EC2: e24cloud identified by sys_vendor"""
+        self._test_ds_found('Ec2-E24Cloud')
+
+    def test_e24cloud_not_active(self):
+        """EC2: bobrightbox.com in product_serial is not brightbox'"""
+        self._test_ds_not_found('Ec2-E24Cloud-negative')
+
 
 class TestIsIBMProvisioning(DsIdentifyBase):
     """Test the is_ibm_provisioning method in ds-identify."""
@@ -724,7 +747,11 @@ VALID_CFG = {
     },
     'Ec2-brightbox': {
         'ds': 'Ec2',
-        'files': {P_PRODUCT_SERIAL: 'facc6e2f.brightbox.com\n'},
+        'files': {P_PRODUCT_SERIAL: 'srv-otuxg.gb1.brightbox.com\n'},
+    },
+    'Ec2-brightbox-negative': {
+        'ds': 'Ec2',
+        'files': {P_PRODUCT_SERIAL: 'tricky-host.bobrightbox.com\n'},
     },
     'GCE': {
         'ds': 'GCE',
@@ -880,6 +907,18 @@ VALID_CFG = {
             os.path.join(P_SEED_DIR, 'config_drive', 'openstack',
                          'latest', 'meta_data.json'): 'md\n'},
     },
+    'RbxCloud': {
+        'ds': 'RbxCloud',
+        'mocks': [
+            {'name': 'blkid', 'ret': 0,
+             'out': blkid_out(
+                 [{'DEVNAME': 'vda1', 'TYPE': 'vfat', 'PARTUUID': uuid4()},
+                  {'DEVNAME': 'vda2', 'TYPE': 'ext4',
+                   'LABEL': 'cloudimg-rootfs', 'PARTUUID': uuid4()},
+                  {'DEVNAME': 'vdb', 'TYPE': 'vfat', 'LABEL': 'CLOUDMD'}]
+             )},
+        ],
+    },
     'Hetzner': {
         'ds': 'Hetzner',
         'files': {P_SYS_VENDOR: 'Hetzner\n'},
@@ -959,8 +998,19 @@ VALID_CFG = {
             {'name': 'blkid', 'ret': 2, 'out': ''},
         ],
         'files': {ds_smartos.METADATA_SOCKFILE: 'would be a socket\n'},
-    }
-
+    },
+    'Ec2-ZStack': {
+        'ds': 'Ec2',
+        'files': {P_CHASSIS_ASSET_TAG: '123456.zstack.io\n'},
+    },
+    'Ec2-E24Cloud': {
+        'ds': 'Ec2',
+        'files': {P_SYS_VENDOR: 'e24cloud\n'},
+     },
+    'Ec2-E24Cloud-negative': {
+        'ds': 'Ec2',
+        'files': {P_SYS_VENDOR: 'e24cloudyday\n'},
+     }
 }
 
 # vi: ts=4 expandtab

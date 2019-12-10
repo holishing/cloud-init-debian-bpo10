@@ -12,6 +12,7 @@ from cloudinit.tests.helpers import (
     HttprettyTestCase, CiTestCase, populate_dir, mock, wrap_and_call,
     ExitStack, resourceLocation)
 
+import copy
 import crypt
 import httpretty
 import json
@@ -129,7 +130,123 @@ NETWORK_METADATA = {
     }
 }
 
+SECONDARY_INTERFACE = {
+    "macAddress": "220D3A047598",
+    "ipv6": {
+        "ipAddress": []
+    },
+    "ipv4": {
+        "subnet": [
+            {
+                "prefix": "24",
+                "address": "10.0.1.0"
+            }
+        ],
+        "ipAddress": [
+            {
+                "privateIpAddress": "10.0.1.5",
+            }
+        ]
+    }
+}
+
 MOCKPATH = 'cloudinit.sources.DataSourceAzure.'
+
+
+class TestParseNetworkConfig(CiTestCase):
+
+    maxDiff = None
+
+    def test_single_ipv4_nic_configuration(self):
+        """parse_network_config emits dhcp on single nic with ipv4"""
+        expected = {'ethernets': {
+            'eth0': {'dhcp4': True,
+                     'dhcp4-overrides': {'route-metric': 100},
+                     'dhcp6': False,
+                     'match': {'macaddress': '00:0d:3a:04:75:98'},
+                     'set-name': 'eth0'}}, 'version': 2}
+        self.assertEqual(expected, dsaz.parse_network_config(NETWORK_METADATA))
+
+    def test_increases_route_metric_for_non_primary_nics(self):
+        """parse_network_config increases route-metric for each nic"""
+        expected = {'ethernets': {
+            'eth0': {'dhcp4': True,
+                     'dhcp4-overrides': {'route-metric': 100},
+                     'dhcp6': False,
+                     'match': {'macaddress': '00:0d:3a:04:75:98'},
+                     'set-name': 'eth0'},
+            'eth1': {'set-name': 'eth1',
+                     'match': {'macaddress': '22:0d:3a:04:75:98'},
+                     'dhcp6': False,
+                     'dhcp4': True,
+                     'dhcp4-overrides': {'route-metric': 200}},
+            'eth2': {'set-name': 'eth2',
+                     'match': {'macaddress': '33:0d:3a:04:75:98'},
+                     'dhcp6': False,
+                     'dhcp4': True,
+                     'dhcp4-overrides': {'route-metric': 300}}}, 'version': 2}
+        imds_data = copy.deepcopy(NETWORK_METADATA)
+        imds_data['network']['interface'].append(SECONDARY_INTERFACE)
+        third_intf = copy.deepcopy(SECONDARY_INTERFACE)
+        third_intf['macAddress'] = third_intf['macAddress'].replace('22', '33')
+        third_intf['ipv4']['subnet'][0]['address'] = '10.0.2.0'
+        third_intf['ipv4']['ipAddress'][0]['privateIpAddress'] = '10.0.2.6'
+        imds_data['network']['interface'].append(third_intf)
+        self.assertEqual(expected, dsaz.parse_network_config(imds_data))
+
+    def test_ipv4_and_ipv6_route_metrics_match_for_nics(self):
+        """parse_network_config emits matching ipv4 and ipv6 route-metrics."""
+        expected = {'ethernets': {
+            'eth0': {'dhcp4': True,
+                     'dhcp4-overrides': {'route-metric': 100},
+                     'dhcp6': False,
+                     'match': {'macaddress': '00:0d:3a:04:75:98'},
+                     'set-name': 'eth0'},
+            'eth1': {'set-name': 'eth1',
+                     'match': {'macaddress': '22:0d:3a:04:75:98'},
+                     'dhcp4': True,
+                     'dhcp6': False,
+                     'dhcp4-overrides': {'route-metric': 200}},
+            'eth2': {'set-name': 'eth2',
+                     'match': {'macaddress': '33:0d:3a:04:75:98'},
+                     'dhcp4': True,
+                     'dhcp4-overrides': {'route-metric': 300},
+                     'dhcp6': True,
+                     'dhcp6-overrides': {'route-metric': 300}}}, 'version': 2}
+        imds_data = copy.deepcopy(NETWORK_METADATA)
+        imds_data['network']['interface'].append(SECONDARY_INTERFACE)
+        third_intf = copy.deepcopy(SECONDARY_INTERFACE)
+        third_intf['macAddress'] = third_intf['macAddress'].replace('22', '33')
+        third_intf['ipv4']['subnet'][0]['address'] = '10.0.2.0'
+        third_intf['ipv4']['ipAddress'][0]['privateIpAddress'] = '10.0.2.6'
+        third_intf['ipv6'] = {
+            "subnet": [{"prefix": "64", "address": "2001:dead:beef::2"}],
+            "ipAddress": [{"privateIpAddress": "2001:dead:beef::1"}]
+        }
+        imds_data['network']['interface'].append(third_intf)
+        self.assertEqual(expected, dsaz.parse_network_config(imds_data))
+
+    def test_ipv4_secondary_ips_will_be_static_addrs(self):
+        """parse_network_config emits primary ipv4 as dhcp others are static"""
+        expected = {'ethernets': {
+            'eth0': {'addresses': ['10.0.0.5/24'],
+                     'dhcp4': True,
+                     'dhcp4-overrides': {'route-metric': 100},
+                     'dhcp6': True,
+                     'dhcp6-overrides': {'route-metric': 100},
+                     'match': {'macaddress': '00:0d:3a:04:75:98'},
+                     'set-name': 'eth0'}}, 'version': 2}
+        imds_data = copy.deepcopy(NETWORK_METADATA)
+        nic1 = imds_data['network']['interface'][0]
+        nic1['ipv4']['ipAddress'].append({'privateIpAddress': '10.0.0.5'})
+
+        # Secondary ipv6 addresses currently ignored/unconfigured
+        nic1['ipv6'] = {
+            "subnet": [{"prefix": "10", "address": "2001:dead:beef::16"}],
+            "ipAddress": [{"privateIpAddress": "2001:dead:beef::1"},
+                          {"privateIpAddress": "2001:dead:beef::2"}]
+        }
+        self.assertEqual(expected, dsaz.parse_network_config(imds_data))
 
 
 class TestGetMetadataFromIMDS(HttprettyTestCase):
@@ -160,7 +277,7 @@ class TestGetMetadataFromIMDS(HttprettyTestCase):
             self.logs.getvalue())
 
     @mock.patch(MOCKPATH + 'readurl')
-    @mock.patch(MOCKPATH + 'EphemeralDHCPv4')
+    @mock.patch(MOCKPATH + 'EphemeralDHCPv4WithReporting')
     @mock.patch(MOCKPATH + 'net.is_up')
     def test_get_metadata_performs_dhcp_when_network_is_down(
             self, m_net_is_up, m_dhcp, m_readurl):
@@ -174,7 +291,7 @@ class TestGetMetadataFromIMDS(HttprettyTestCase):
             dsaz.get_metadata_from_imds('eth9', retries=2))
 
         m_net_is_up.assert_called_with('eth9')
-        m_dhcp.assert_called_with('eth9')
+        m_dhcp.assert_called_with(mock.ANY, 'eth9')
         self.assertIn(
             "Crawl of Azure Instance Metadata Service (IMDS) took",  # log_time
             self.logs.getvalue())
@@ -531,7 +648,8 @@ scbus-1 on xpt0 bus 0
             dsrc.crawl_metadata()
         self.assertEqual(str(cm.exception), error_msg)
 
-    @mock.patch('cloudinit.sources.DataSourceAzure.EphemeralDHCPv4')
+    @mock.patch(
+        'cloudinit.sources.DataSourceAzure.EphemeralDHCPv4WithReporting')
     @mock.patch('cloudinit.sources.DataSourceAzure.util.write_file')
     @mock.patch(
         'cloudinit.sources.DataSourceAzure.DataSourceAzure._report_ready')
@@ -619,8 +737,47 @@ scbus-1 on xpt0 bus 0
             'ethernets': {
                 'eth0': {'set-name': 'eth0',
                          'match': {'macaddress': '00:0d:3a:04:75:98'},
-                         'dhcp4': True}},
+                         'dhcp6': False,
+                         'dhcp4': True,
+                         'dhcp4-overrides': {'route-metric': 100}}},
             'version': 2}
+        dsrc = self._get_ds(data)
+        dsrc.get_data()
+        self.assertEqual(expected_network_config, dsrc.network_config)
+
+    def test_network_config_set_from_imds_route_metric_for_secondary_nic(self):
+        """Datasource.network_config adds route-metric to secondary nics."""
+        sys_cfg = {'datasource': {'Azure': {'apply_network_config': True}}}
+        odata = {}
+        data = {'ovfcontent': construct_valid_ovf_env(data=odata),
+                'sys_cfg': sys_cfg}
+        expected_network_config = {
+            'ethernets': {
+                'eth0': {'set-name': 'eth0',
+                         'match': {'macaddress': '00:0d:3a:04:75:98'},
+                         'dhcp6': False,
+                         'dhcp4': True,
+                         'dhcp4-overrides': {'route-metric': 100}},
+                'eth1': {'set-name': 'eth1',
+                         'match': {'macaddress': '22:0d:3a:04:75:98'},
+                         'dhcp6': False,
+                         'dhcp4': True,
+                         'dhcp4-overrides': {'route-metric': 200}},
+                'eth2': {'set-name': 'eth2',
+                         'match': {'macaddress': '33:0d:3a:04:75:98'},
+                         'dhcp6': False,
+                         'dhcp4': True,
+                         'dhcp4-overrides': {'route-metric': 300}}},
+            'version': 2}
+        imds_data = copy.deepcopy(NETWORK_METADATA)
+        imds_data['network']['interface'].append(SECONDARY_INTERFACE)
+        third_intf = copy.deepcopy(SECONDARY_INTERFACE)
+        third_intf['macAddress'] = third_intf['macAddress'].replace('22', '33')
+        third_intf['ipv4']['subnet'][0]['address'] = '10.0.2.0'
+        third_intf['ipv4']['ipAddress'][0]['privateIpAddress'] = '10.0.2.6'
+        imds_data['network']['interface'].append(third_intf)
+
+        self.m_get_metadata_from_imds.return_value = imds_data
         dsrc = self._get_ds(data)
         dsrc.get_data()
         self.assertEqual(expected_network_config, dsrc.network_config)
@@ -711,6 +868,22 @@ scbus-1 on xpt0 bus 0
         self.assertEqual(defuser['passwd'],
                          crypt.crypt(odata['UserPassword'],
                                      defuser['passwd'][0:pos]))
+
+    def test_user_not_locked_if_password_redacted(self):
+        odata = {'HostName': "myhost", 'UserName': "myuser",
+                 'UserPassword': dsaz.DEF_PASSWD_REDACTION}
+        data = {'ovfcontent': construct_valid_ovf_env(data=odata)}
+
+        dsrc = self._get_ds(data)
+        ret = dsrc.get_data()
+        self.assertTrue(ret)
+        self.assertTrue('default_user' in dsrc.cfg['system_info'])
+        defuser = dsrc.cfg['system_info']['default_user']
+
+        # default user should be updated username and should not be locked.
+        self.assertEqual(defuser['name'], odata['UserName'])
+        self.assertIn('lock_passwd', defuser)
+        self.assertFalse(defuser['lock_passwd'])
 
     def test_userdata_plain(self):
         mydata = "FOOBAR"
@@ -925,6 +1098,8 @@ scbus-1 on xpt0 bus 0
         expected_cfg = {
             'ethernets': {
                 'eth0': {'dhcp4': True,
+                         'dhcp4-overrides': {'route-metric': 100},
+                         'dhcp6': False,
                          'match': {'macaddress': '00:0d:3a:04:75:98'},
                          'set-name': 'eth0'}},
             'version': 2}
@@ -1251,7 +1426,9 @@ class TestAzureBounce(CiTestCase):
         self.assertEqual(initial_host_name,
                          self.set_hostname.call_args_list[-1][0][0])
 
-    def test_environment_correct_for_bounce_command(self):
+    @mock.patch.object(dsaz, 'get_boot_telemetry')
+    def test_environment_correct_for_bounce_command(
+            self, mock_get_boot_telemetry):
         interface = 'int0'
         hostname = 'my-new-host'
         old_hostname = 'my-old-host'
@@ -1267,7 +1444,9 @@ class TestAzureBounce(CiTestCase):
         self.assertEqual(hostname, bounce_env['hostname'])
         self.assertEqual(old_hostname, bounce_env['old_hostname'])
 
-    def test_default_bounce_command_ifup_used_by_default(self):
+    @mock.patch.object(dsaz, 'get_boot_telemetry')
+    def test_default_bounce_command_ifup_used_by_default(
+            self, mock_get_boot_telemetry):
         cfg = {'hostname_bounce': {'policy': 'force'}}
         data = self.get_ovf_env_with_dscfg('some-hostname', cfg)
         dsrc = self._get_ds(data, agent_command=['not', '__builtin__'])

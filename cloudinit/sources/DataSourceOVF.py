@@ -40,10 +40,14 @@ from cloudinit.sources.helpers.vmware.imc.guestcust_state \
 from cloudinit.sources.helpers.vmware.imc.guestcust_util import (
     enable_nics,
     get_nics_to_enable,
-    set_customization_status
+    set_customization_status,
+    get_tools_config
 )
 
 LOG = logging.getLogger(__name__)
+
+CONFGROUPNAME_GUESTCUSTOMIZATION = "deployPkg"
+GUESTCUSTOMIZATION_ENABLE_CUST_SCRIPTS = "enable-custom-scripts"
 
 
 class DataSourceOVF(sources.DataSource):
@@ -148,6 +152,21 @@ class DataSourceOVF(sources.DataSource):
                     product_marker, os.path.join(self.paths.cloud_dir, 'data'))
                 special_customization = product_marker and not hasmarkerfile
                 customscript = self._vmware_cust_conf.custom_script_name
+                custScriptConfig = get_tools_config(
+                    CONFGROUPNAME_GUESTCUSTOMIZATION,
+                    GUESTCUSTOMIZATION_ENABLE_CUST_SCRIPTS,
+                    "false")
+                if custScriptConfig.lower() != "true":
+                    # Update the customization status if there is a
+                    # custom script is disabled
+                    if special_customization and customscript:
+                        msg = "Custom script is disabled by VM Administrator"
+                        LOG.debug(msg)
+                        set_customization_status(
+                            GuestCustStateEnum.GUESTCUST_STATE_RUNNING,
+                            GuestCustErrorEnum.GUESTCUST_ERROR_SCRIPT_DISABLED)
+                        raise RuntimeError(msg)
+
                 ccScriptsDir = os.path.join(
                     self.paths.get_cpath("scripts"),
                     "per-instance")
@@ -387,9 +406,7 @@ def read_vmware_imc(config):
     if config.timezone:
         cfg['timezone'] = config.timezone
 
-    # Generate a unique instance-id so that re-customization will
-    # happen in cloud-init
-    md['instance-id'] = "iid-vmware-" + util.rand_str(strlen=8)
+    md['instance-id'] = "iid-vmware-imc"
     return (md, ud, cfg)
 
 

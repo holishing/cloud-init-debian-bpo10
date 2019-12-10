@@ -6,7 +6,9 @@ import functools
 import httpretty
 import logging
 import os
+import random
 import shutil
+import string
 import sys
 import tempfile
 import time
@@ -198,7 +200,8 @@ class CiTestCase(TestCase):
                 prefix="ci-%s." % self.__class__.__name__)
         else:
             tmpd = tempfile.mkdtemp(dir=dir)
-        self.addCleanup(functools.partial(shutil.rmtree, tmpd))
+        self.addCleanup(
+            functools.partial(shutil.rmtree, tmpd, ignore_errors=True))
         return tmpd
 
     def tmp_path(self, path, dir=None):
@@ -241,6 +244,12 @@ class CiTestCase(TestCase):
         if metadata:
             myds.metadata.update(metadata)
         return cloud.Cloud(myds, self.paths, sys_cfg, mydist, None)
+
+    @classmethod
+    def random_string(cls, length=8):
+        """ return a random lowercase string with default length of 8"""
+        return ''.join(
+            random.choice(string.ascii_lowercase) for _ in range(length))
 
 
 class ResourceUsingTestCase(CiTestCase):
