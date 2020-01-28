@@ -1,3 +1,9 @@
+cloud-init (19.3-2) unstable; urgency=medium
+
+  * Build-depends on python3-pep8 instead of just pep8 (Closes: #949940).
+
+ -- Thomas Goirand <zigo@debian.org>  Tue, 28 Jan 2020 13:11:23 +0100
+
 cloud-init (19.3-1) unstable; urgency=medium
 
   * New upstream release.
