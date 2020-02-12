@@ -36,7 +36,7 @@ ALL_DISTROS = 'all'
 
 OSFAMILIES = {
     'debian': ['debian', 'ubuntu'],
-    'redhat': ['centos', 'fedora', 'rhel'],
+    'redhat': ['amazon', 'centos', 'fedora', 'rhel'],
     'gentoo': ['gentoo'],
     'freebsd': ['freebsd'],
     'suse': ['opensuse', 'sles'],
@@ -589,6 +589,13 @@ class Distro(object):
             util.subp(cmd)
         except Exception as e:
             util.logexc(LOG, 'Failed to disable password for user %s', name)
+            raise e
+
+    def expire_passwd(self, user):
+        try:
+            util.subp(['passwd', '--expire', user])
+        except Exception as e:
+            util.logexc(LOG, "Failed to set 'expire' for %s", user)
             raise e
 
     def set_passwd(self, user, passwd, hashed=False):

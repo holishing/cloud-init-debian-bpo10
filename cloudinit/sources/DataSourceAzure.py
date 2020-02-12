@@ -33,7 +33,8 @@ from cloudinit.sources.helpers.azure import (
     get_boot_telemetry,
     get_system_info,
     report_diagnostic_event,
-    EphemeralDHCPv4WithReporting)
+    EphemeralDHCPv4WithReporting,
+    is_byte_swapped)
 
 LOG = logging.getLogger(__name__)
 
@@ -471,8 +472,7 @@ class DataSourceAzure(sources.DataSource):
         seed = _get_random_seed()
         if seed:
             crawled_data['metadata']['random_seed'] = seed
-        crawled_data['metadata']['instance-id'] = util.read_dmi_data(
-            'system-uuid')
+        crawled_data['metadata']['instance-id'] = self._iid()
 
         if perform_reprovision:
             LOG.info("Reporting ready to Azure after getting ReprovisionData")
@@ -557,6 +557,16 @@ class DataSourceAzure(sources.DataSource):
     def check_instance_id(self, sys_cfg):
         # quickly (local check only) if self.instance_id is still valid
         return sources.instance_id_matches_system_uuid(self.get_instance_id())
+
+    def _iid(self, previous=None):
+        prev_iid_path = os.path.join(
+            self.paths.get_cpath('data'), 'instance-id')
+        iid = util.read_dmi_data('system-uuid')
+        if os.path.exists(prev_iid_path):
+            previous = util.load_file(prev_iid_path).strip()
+            if is_byte_swapped(previous, iid):
+                return previous
+        return iid
 
     @azure_ds_telemetry_reporter
     def setup(self, is_new_instance):
@@ -1321,36 +1331,35 @@ def parse_network_config(imds_metadata):
             LOG.debug('Azure: generating network configuration from IMDS')
             network_metadata = imds_metadata['network']
             for idx, intf in enumerate(network_metadata['interface']):
+                # First IPv4 and/or IPv6 address will be obtained via DHCP.
+                # Any additional IPs of each type will be set as static
+                # addresses.
                 nicname = 'eth{idx}'.format(idx=idx)
-                dev_config = {'dhcp4': False, 'dhcp6': False}
                 dhcp_override = {'route-metric': (idx + 1) * 100}
-                for addr4 in intf['ipv4']['ipAddress']:
-                    privateIpv4 = addr4['privateIpAddress']
-                    if privateIpv4:
-                        if dev_config.get('dhcp4', False):
-                            # Append static address config for ip > 1
-                            netPrefix = intf['ipv4']['subnet'][0].get(
-                                'prefix', '24')
-                            if not dev_config.get('addresses'):
-                                dev_config['addresses'] = []
-                            dev_config['addresses'].append(
-                                '{ip}/{prefix}'.format(
-                                    ip=privateIpv4, prefix=netPrefix))
-                        else:
-                            dev_config['dhcp4'] = True
+                dev_config = {'dhcp4': True, 'dhcp4-overrides': dhcp_override,
+                              'dhcp6': False}
+                for addr_type in ('ipv4', 'ipv6'):
+                    addresses = intf.get(addr_type, {}).get('ipAddress', [])
+                    if addr_type == 'ipv4':
+                        default_prefix = '24'
+                    else:
+                        default_prefix = '128'
+                        if addresses:
+                            dev_config['dhcp6'] = True
                             # non-primary interfaces should have a higher
                             # route-metric (cost) so default routes prefer
                             # primary nic due to lower route-metric value
-                            dev_config['dhcp4-overrides'] = dhcp_override
-                for addr6 in intf['ipv6']['ipAddress']:
-                    privateIpv6 = addr6['privateIpAddress']
-                    if privateIpv6:
-                        dev_config['dhcp6'] = True
-                        # non-primary interfaces should have a higher
-                        # route-metric (cost) so default routes prefer
-                        # primary nic due to lower route-metric value
-                        dev_config['dhcp6-overrides'] = dhcp_override
-                        break
+                            dev_config['dhcp6-overrides'] = dhcp_override
+                    for addr in addresses[1:]:
+                        # Append static address config for ip > 1
+                        netPrefix = intf[addr_type]['subnet'][0].get(
+                            'prefix', default_prefix)
+                        privateIp = addr['privateIpAddress']
+                        if not dev_config.get('addresses'):
+                            dev_config['addresses'] = []
+                        dev_config['addresses'].append(
+                            '{ip}/{prefix}'.format(
+                                ip=privateIp, prefix=netPrefix))
                 if dev_config:
                     mac = ':'.join(re.findall(r'..', intf['macAddress']))
                     dev_config.update(
