@@ -197,9 +197,11 @@ class TestParseNetworkConfig(CiTestCase):
     def test_ipv4_and_ipv6_route_metrics_match_for_nics(self):
         """parse_network_config emits matching ipv4 and ipv6 route-metrics."""
         expected = {'ethernets': {
-            'eth0': {'dhcp4': True,
+            'eth0': {'addresses': ['10.0.0.5/24', '2001:dead:beef::2/128'],
+                     'dhcp4': True,
                      'dhcp4-overrides': {'route-metric': 100},
-                     'dhcp6': False,
+                     'dhcp6': True,
+                     'dhcp6-overrides': {'route-metric': 100},
                      'match': {'macaddress': '00:0d:3a:04:75:98'},
                      'set-name': 'eth0'},
             'eth1': {'set-name': 'eth1',
@@ -214,6 +216,14 @@ class TestParseNetworkConfig(CiTestCase):
                      'dhcp6': True,
                      'dhcp6-overrides': {'route-metric': 300}}}, 'version': 2}
         imds_data = copy.deepcopy(NETWORK_METADATA)
+        nic1 = imds_data['network']['interface'][0]
+        nic1['ipv4']['ipAddress'].append({'privateIpAddress': '10.0.0.5'})
+
+        nic1['ipv6'] = {
+            "subnet": [{"address": "2001:dead:beef::16"}],
+            "ipAddress": [{"privateIpAddress": "2001:dead:beef::1"},
+                          {"privateIpAddress": "2001:dead:beef::2"}]
+        }
         imds_data['network']['interface'].append(SECONDARY_INTERFACE)
         third_intf = copy.deepcopy(SECONDARY_INTERFACE)
         third_intf['macAddress'] = third_intf['macAddress'].replace('22', '33')
@@ -230,6 +240,26 @@ class TestParseNetworkConfig(CiTestCase):
         """parse_network_config emits primary ipv4 as dhcp others are static"""
         expected = {'ethernets': {
             'eth0': {'addresses': ['10.0.0.5/24'],
+                     'dhcp4': True,
+                     'dhcp4-overrides': {'route-metric': 100},
+                     'dhcp6': True,
+                     'dhcp6-overrides': {'route-metric': 100},
+                     'match': {'macaddress': '00:0d:3a:04:75:98'},
+                     'set-name': 'eth0'}}, 'version': 2}
+        imds_data = copy.deepcopy(NETWORK_METADATA)
+        nic1 = imds_data['network']['interface'][0]
+        nic1['ipv4']['ipAddress'].append({'privateIpAddress': '10.0.0.5'})
+
+        nic1['ipv6'] = {
+            "subnet": [{"prefix": "10", "address": "2001:dead:beef::16"}],
+            "ipAddress": [{"privateIpAddress": "2001:dead:beef::1"}]
+        }
+        self.assertEqual(expected, dsaz.parse_network_config(imds_data))
+
+    def test_ipv6_secondary_ips_will_be_static_cidrs(self):
+        """parse_network_config emits primary ipv6 as dhcp others are static"""
+        expected = {'ethernets': {
+            'eth0': {'addresses': ['10.0.0.5/24', '2001:dead:beef::2/10'],
                      'dhcp4': True,
                      'dhcp4-overrides': {'route-metric': 100},
                      'dhcp6': True,
@@ -447,7 +477,7 @@ scbus-1 on xpt0 bus 0
             'public-keys': [],
         })
 
-        self.instance_id = 'test-instance-id'
+        self.instance_id = 'D0DF4C54-4ECB-4A4B-9954-5BDF3ED5C3B8'
 
         def _dmi_mocks(key):
             if key == 'system-uuid':
@@ -615,7 +645,7 @@ scbus-1 on xpt0 bus 0
             'azure_data': {
                 'configurationsettype': 'LinuxProvisioningConfiguration'},
             'imds': NETWORK_METADATA,
-            'instance-id': 'test-instance-id',
+            'instance-id': 'D0DF4C54-4ECB-4A4B-9954-5BDF3ED5C3B8',
             'local-hostname': u'myhost',
             'random_seed': 'wild'}
 
@@ -1061,6 +1091,24 @@ scbus-1 on xpt0 bus 0
         self.assertTrue(ret)
         self.assertEqual('value', dsrc.metadata['test'])
 
+    def test_instance_id_endianness(self):
+        """Return the previous iid when dmi uuid is the byteswapped iid."""
+        ds = self._get_ds({'ovfcontent': construct_valid_ovf_env()})
+        # byte-swapped previous
+        write_file(
+            os.path.join(self.paths.cloud_dir, 'data', 'instance-id'),
+            '544CDFD0-CB4E-4B4A-9954-5BDF3ED5C3B8')
+        ds.get_data()
+        self.assertEqual(
+            '544CDFD0-CB4E-4B4A-9954-5BDF3ED5C3B8', ds.metadata['instance-id'])
+        # not byte-swapped previous
+        write_file(
+            os.path.join(self.paths.cloud_dir, 'data', 'instance-id'),
+            '644CDFD0-CB4E-4B4A-9954-5BDF3ED5C3B8')
+        ds.get_data()
+        self.assertEqual(
+            'D0DF4C54-4ECB-4A4B-9954-5BDF3ED5C3B8', ds.metadata['instance-id'])
+
     def test_instance_id_from_dmidecode_used(self):
         ds = self._get_ds({'ovfcontent': construct_valid_ovf_env()})
         ds.get_data()
@@ -1262,7 +1310,7 @@ class TestAzureBounce(CiTestCase):
 
         def _dmi_mocks(key):
             if key == 'system-uuid':
-                return 'test-instance-id'
+                return 'D0DF4C54-4ECB-4A4B-9954-5BDF3ED5C3B8'
             elif key == 'chassis-asset-tag':
                 return '7783-7084-3265-9085-8269-3286-77'
             raise RuntimeError('should not get here')
