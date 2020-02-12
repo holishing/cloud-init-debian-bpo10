@@ -4,6 +4,7 @@ Uploaders:
  Bastian Blank <waldi@debian.org>,
  Charles Plessy <plessy@debian.org>,
  Thomas Goirand <zigo@debian.org>,
+ Noah Meyerhans <noahm@debian.org>,
 Section: admin
 Priority: optional
 Build-Depends:
