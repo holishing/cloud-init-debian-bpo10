@@ -26,7 +26,6 @@ Build-Depends-Indep:
  python3-mock,
  python3-nose,
  python3-oauthlib,
- python3-pep8,
  python3-prettytable,
  python3-pyflakes,
  python3-requests,
