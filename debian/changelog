@@ -1,3 +1,12 @@
+cloud-init (19.4-2) unstable; urgency=medium
+
+  * Import upstream fix for CVE-2020-8632.  rand_user_password generates
+    passwords of insufficient length.  (Closes: #951363)
+  * Import upstream fix for CVE-2020-8631.  Cloud-init uses an insufficient
+    source of randomness when generating passwords. (Closes: #951362)
+
+ -- Noah Meyerhans <noahm@debian.org>  Tue, 18 Feb 2020 14:17:28 -0800
+
 cloud-init (19.4-1) unstable; urgency=medium
 
   * New upstream release.
