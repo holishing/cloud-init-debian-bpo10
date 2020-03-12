@@ -6,6 +6,7 @@ cloud-init (20.1-1) unstable; urgency=medium
     - CVE-2020-8632.patch
   * Refresh patches:
     - 0009-Drop-all-unused-extended-version-handling.patch
+  * Reduce cloud-guest-utils from Depends to Recommends
 
  --
 
