@@ -1,3 +1,14 @@
+cloud-init (20.1-1) unstable; urgency=medium
+
+  * New upstream release
+  * Remove patches applied upstream:
+    - CVE-2020-8631.patch
+    - CVE-2020-8632.patch
+  * Refresh patches:
+    - 0009-Drop-all-unused-extended-version-handling.patch
+
+ --
+
 cloud-init (19.4-2) unstable; urgency=medium
 
   * Import upstream fix for CVE-2020-8632.  rand_user_password generates
