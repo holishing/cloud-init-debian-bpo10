@@ -10,7 +10,6 @@
 
 import contextlib
 import copy as obj_copy
-import ctypes
 import email
 import glob
 import grp
@@ -80,14 +79,19 @@ CONTAINER_TESTS = (['systemd-detect-virt', '--quiet', '--container'],
 
 
 @lru_cache()
-def get_architecture(target=None):
+def get_dpkg_architecture(target=None):
+    """Return the sanitized string output by `dpkg --print-architecture`.
+
+    N.B. This function is wrapped in functools.lru_cache, so repeated calls
+    won't shell out every time.
+    """
     out, _ = subp(['dpkg', '--print-architecture'], capture=True,
                   target=target)
     return out.strip()
 
 
 @lru_cache()
-def _lsb_release(target=None):
+def lsb_release(target=None):
     fmap = {'Codename': 'codename', 'Description': 'description',
             'Distributor ID': 'id', 'Release': 'release'}
 
@@ -108,14 +112,6 @@ def _lsb_release(target=None):
         data = dict((v, "UNAVAILABLE") for v in fmap.values())
 
     return data
-
-
-def lsb_release(target=None):
-    if target_path(target) != "/":
-        # do not use or update cache if target is provided
-        return _lsb_release(target)
-
-    return _lsb_release()
 
 
 def target_path(target, path=None):
@@ -401,9 +397,10 @@ def translate_bool(val, addons=None):
 
 
 def rand_str(strlen=32, select_from=None):
+    r = random.SystemRandom()
     if not select_from:
         select_from = string.ascii_letters + string.digits
-    return "".join([random.choice(select_from) for _x in range(0, strlen)])
+    return "".join([r.choice(select_from) for _x in range(0, strlen)])
 
 
 def rand_dict_key(dictionary, postfix=None):
@@ -635,8 +632,8 @@ def get_linux_distro():
     else:
         dist = ('', '', '')
         try:
-            # Will be removed in 3.7
-            dist = platform.dist()  # pylint: disable=W1505
+            # Was removed in 3.8
+            dist = platform.dist()  # pylint: disable=W1505,E1101
         except Exception:
             pass
         finally:
@@ -1807,6 +1804,33 @@ def time_rfc2822():
     return ts
 
 
+def boottime():
+    """Use sysctlbyname(3) via ctypes to find kern.boottime
+
+    kern.boottime is of type struct timeval. Here we create a
+    private class to easier unpack it.
+
+    @return boottime: float to be compatible with linux
+    """
+    import ctypes
+
+    NULL_BYTES = b"\x00"
+
+    class timeval(ctypes.Structure):
+        _fields_ = [
+            ("tv_sec", ctypes.c_int64),
+            ("tv_usec", ctypes.c_int64)
+        ]
+    libc = ctypes.CDLL('/lib/libc.so.7')
+    size = ctypes.c_size_t()
+    size.value = ctypes.sizeof(timeval)
+    buf = timeval()
+    if libc.sysctlbyname(b"kern.boottime" + NULL_BYTES, ctypes.byref(buf),
+                         ctypes.byref(size), None, 0) != -1:
+        return buf.tv_sec + buf.tv_usec / 1000000.0
+    raise RuntimeError("Unable to retrieve kern.boottime on this system")
+
+
 def uptime():
     uptime_str = '??'
     method = 'unknown'
@@ -1818,15 +1842,8 @@ def uptime():
                 uptime_str = contents.split()[0]
         else:
             method = 'ctypes'
-            libc = ctypes.CDLL('/lib/libc.so.7')
-            size = ctypes.c_size_t()
-            buf = ctypes.c_int()
-            size.value = ctypes.sizeof(buf)
-            libc.sysctlbyname("kern.boottime", ctypes.byref(buf),
-                              ctypes.byref(size), None, 0)
-            now = time.time()
-            bootup = buf.value
-            uptime_str = now - bootup
+            # This is the *BSD codepath
+            uptime_str = str(time.time() - boottime())
 
     except Exception:
         logexc(LOG, "Unable to read uptime using method: %s" % method)
