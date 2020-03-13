@@ -11,7 +11,7 @@ cloud-init (20.1-1) unstable; urgency=medium
   * Remove Charles Plessy <plessy@debian.org> from uploaders, as he is no
     longer active in the cloud team.
 
- --
+ -- Noah Meyerhans <noahm@debian.org>  Fri, 13 Mar 2020 14:26:55 -0700
 
 cloud-init (19.4-2) unstable; urgency=medium
 
