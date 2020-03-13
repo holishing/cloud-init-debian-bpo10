@@ -3,6 +3,8 @@ cloud-init (20.1-2) UNRELEASED; urgency=medium
   * Fix python 3.8 incompatibility (Closes: #954276)
   * Cherry-pick fa1abfec2705 (ec2: only redact token request headers in
     logs, avoid altering request) from upstream. (Closes: #954363)
+  * Cherry-pick 1f860e5ac7eb (ec2: Do not fallback to IMDSv1 on EC2) from
+    upstream.
 
  --
 
