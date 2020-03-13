@@ -8,6 +8,8 @@ cloud-init (20.1-1) unstable; urgency=medium
     - 0009-Drop-all-unused-extended-version-handling.patch
   * Reduce cloud-guest-utils from Depends to Recommends
   * Bump standards version to 4.5.0 (no changes needed)
+  * Remove Charles Plessy <plessy@debian.org> from uploaders, as he is no
+    longer active in the cloud team.
 
  --
 
