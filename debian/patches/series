@@ -6,3 +6,4 @@ cloud-init-before-chronyd.patch
 0009-Drop-all-unused-extended-version-handling.patch
 0012-Fix-message-when-a-local-is-missing.patch
 0001-Fix-python-3.8-compatibility.patch
+ec2-only-redact-token-request-headers-in-logs.patch
