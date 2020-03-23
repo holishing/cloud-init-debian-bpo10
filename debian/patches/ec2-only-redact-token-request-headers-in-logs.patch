@@ -1,0 +1,106 @@
+From: Chad Smith <chad.smith@canonical.com>
+Date: Tue, 3 Mar 2020 15:23:33 -0700
+Subject: [PATCH] ec2: only redact token request headers in logs, avoid
+ altering request (#230)
+Origin: upstream, https://github.com/canonical/cloud-init/pull/230
+Bug-Debian: https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=954363
+
+Our header redact logic was redacting both logged request headers and
+the actual source request. This results in DataSourceEc2 sending the
+invalid header "X-aws-ec2-metadata-token-ttl-seconds: REDACTED" which
+gets an HTTP status response of 400.
+
+Cloud-init retries this failed token request for 2 minutes before
+falling back to IMDSv1.
+
+LP: #1865882
+---
+ cloudinit/tests/test_url_helper.py | 34 +++++++++++++++++++++++++++++-
+ cloudinit/url_helper.py            | 15 +++++++------
+ 2 files changed, 41 insertions(+), 8 deletions(-)
+
+Index: cloud-init/cloudinit/tests/test_url_helper.py
+===================================================================
+--- cloud-init.orig/cloudinit/tests/test_url_helper.py
++++ cloud-init/cloudinit/tests/test_url_helper.py
+@@ -1,7 +1,8 @@
+ # This file is part of cloud-init. See LICENSE file for license information.
+ 
+ from cloudinit.url_helper import (
+-    NOT_FOUND, UrlError, oauth_headers, read_file_or_url, retry_on_url_exc)
++    NOT_FOUND, UrlError, REDACTED, oauth_headers, read_file_or_url,
++    retry_on_url_exc)
+ from cloudinit.tests.helpers import CiTestCase, mock, skipIf
+ from cloudinit import util
+ from cloudinit import version
+@@ -50,6 +51,9 @@ class TestOAuthHeaders(CiTestCase):
+ 
+ 
+ class TestReadFileOrUrl(CiTestCase):
++
++    with_logs = True
++
+     def test_read_file_or_url_str_from_file(self):
+         """Test that str(result.contents) on file is text version of contents.
+         It should not be "b'data'", but just "'data'" """
+@@ -71,6 +75,34 @@ class TestReadFileOrUrl(CiTestCase):
+         self.assertEqual(result.contents, data)
+         self.assertEqual(str(result), data.decode('utf-8'))
+ 
++    @httpretty.activate
++    def test_read_file_or_url_str_from_url_redacting_headers_from_logs(self):
++        """Headers are redacted from logs but unredacted in requests."""
++        url = 'http://hostname/path'
++        headers = {'sensitive': 'sekret', 'server': 'blah'}
++        httpretty.register_uri(httpretty.GET, url)
++
++        read_file_or_url(url, headers=headers, headers_redact=['sensitive'])
++        logs = self.logs.getvalue()
++        for k in headers.keys():
++            self.assertEqual(headers[k],  httpretty.last_request().headers[k])
++        self.assertIn(REDACTED, logs)
++        self.assertNotIn('sekret', logs)
++
++    @httpretty.activate
++    def test_read_file_or_url_str_from_url_redacts_noheaders(self):
++        """When no headers_redact, header values are in logs and requests."""
++        url = 'http://hostname/path'
++        headers = {'sensitive': 'sekret', 'server': 'blah'}
++        httpretty.register_uri(httpretty.GET, url)
++
++        read_file_or_url(url, headers=headers)
++        for k in headers.keys():
++            self.assertEqual(headers[k], httpretty.last_request().headers[k])
++        logs = self.logs.getvalue()
++        self.assertNotIn(REDACTED, logs)
++        self.assertIn('sekret', logs)
++
+     @mock.patch(M_PATH + 'readurl')
+     def test_read_file_or_url_passes_params_to_readurl(self, m_readurl):
+         """read_file_or_url passes all params through to readurl."""
+Index: cloud-init/cloudinit/url_helper.py
+===================================================================
+--- cloud-init.orig/cloudinit/url_helper.py
++++ cloud-init/cloudinit/url_helper.py
+@@ -281,13 +281,14 @@ def readurl(url, data=None, timeout=None
+         for (k, v) in req_args.items():
+             if k == 'data':
+                 continue
+-            filtered_req_args[k] = v
+-            if k == 'headers':
+-                for hkey, _hval in v.items():
+-                    if hkey in headers_redact:
+-                        filtered_req_args[k][hkey] = (
+-                            copy.deepcopy(req_args[k][hkey]))
+-                        filtered_req_args[k][hkey] = REDACTED
++            if k == 'headers' and headers_redact:
++                matched_headers = [k for k in headers_redact if v.get(k)]
++                if matched_headers:
++                    filtered_req_args[k] = copy.deepcopy(v)
++                    for key in matched_headers:
++                        filtered_req_args[k][key] = REDACTED
++            else:
++                filtered_req_args[k] = v
+         try:
+ 
+             if log_req_resp:
