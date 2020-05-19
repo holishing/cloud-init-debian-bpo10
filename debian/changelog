@@ -4,7 +4,7 @@ cloud-init (20.2-1) unstable; urgency=medium
   * Drop patches that have been merged upstream
   * Switch to pytest for running tests, per upstream change
 
- --
+ -- Noah Meyerhans <noahm@debian.org>  Tue, 19 May 2020 16:07:52 -0700
 
 cloud-init (20.1-2) unstable; urgency=medium
 
