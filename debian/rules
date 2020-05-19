@@ -4,7 +4,7 @@ PYTHON3S:=$(shell py3versions -vr)
 export PYBUILD_INSTALL_ARGS=--init-system=systemd,sysvinit_deb
 
 %:
-	dh $@ --with python3,systemd --buildsystem pybuild
+	dh $@ --with python3 --buildsystem pybuild
 
 override_dh_auto_install:
 	dh_auto_install
