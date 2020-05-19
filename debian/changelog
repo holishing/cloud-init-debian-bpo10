@@ -1,3 +1,10 @@
+cloud-init (20.2-1) unstable; urgency=medium
+
+  * New upstream version
+  * Drop patches that have been merged upstream
+
+ --
+
 cloud-init (20.1-2) unstable; urgency=medium
 
   * Fix python 3.8 incompatibility (Closes: #954276)
