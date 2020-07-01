@@ -1,3 +1,9 @@
+cloud-init (20.2-2~deb10u1) buster; urgency=medium
+
+  * Release for buster.  No further changes.
+
+ -- Noah Meyerhans <noahm@debian.org>  Tue, 30 Jun 2020 17:20:38 -0700
+
 cloud-init (20.2-2) unstable; urgency=medium
 
   * Add missing Build-Dep on python3-pytest
