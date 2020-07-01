@@ -1,3 +1,103 @@
+cloud-init (20.2-2) unstable; urgency=medium
+
+  * Add missing Build-Dep on python3-pytest
+
+ -- Noah Meyerhans <noahm@debian.org>  Tue, 19 May 2020 17:27:07 -0700
+
+cloud-init (20.2-1) unstable; urgency=medium
+
+  * New upstream version
+  * Drop patches that have been merged upstream
+  * Switch to pytest for running tests, per upstream change
+
+ -- Noah Meyerhans <noahm@debian.org>  Tue, 19 May 2020 16:07:52 -0700
+
+cloud-init (20.1-2) unstable; urgency=medium
+
+  * Fix python 3.8 incompatibility (Closes: #954276)
+  * Cherry-pick fa1abfec2705 (ec2: only redact token request headers in
+    logs, avoid altering request) from upstream. (Closes: #954363)
+  * Cherry-pick 1f860e5ac7eb (ec2: Do not fallback to IMDSv1 on EC2) from
+    upstream.
+
+ -- Noah Meyerhans <noahm@debian.org>  Mon, 23 Mar 2020 09:02:27 -0700
+
+cloud-init (20.1-1) unstable; urgency=medium
+
+  * New upstream release
+  * Remove patches applied upstream:
+    - CVE-2020-8631.patch
+    - CVE-2020-8632.patch
+  * Refresh patches:
+    - 0009-Drop-all-unused-extended-version-handling.patch
+  * Reduce cloud-guest-utils from Depends to Recommends
+  * Bump standards version to 4.5.0 (no changes needed)
+  * Remove Charles Plessy <plessy@debian.org> from uploaders, as he is no
+    longer active in the cloud team.
+
+ -- Noah Meyerhans <noahm@debian.org>  Fri, 13 Mar 2020 14:26:55 -0700
+
+cloud-init (19.4-2) unstable; urgency=medium
+
+  * Import upstream fix for CVE-2020-8632.  rand_user_password generates
+    passwords of insufficient length.  (Closes: #951363)
+  * Import upstream fix for CVE-2020-8631.  Cloud-init uses an insufficient
+    source of randomness when generating passwords. (Closes: #951362)
+
+ -- Noah Meyerhans <noahm@debian.org>  Tue, 18 Feb 2020 14:17:28 -0800
+
+cloud-init (19.4-1) unstable; urgency=medium
+
+  * New upstream release.
+  * Update debian/copyright to note dual-dual license status (Closes: #866613)
+
+ -- Noah Meyerhans <noahm@debian.org>  Fri, 14 Feb 2020 16:37:08 -0800
+
+cloud-init (19.3-2) unstable; urgency=medium
+
+  * Build-depends on python3-pep8 instead of just pep8 (Closes: #949940).
+
+ -- Thomas Goirand <zigo@debian.org>  Tue, 28 Jan 2020 13:11:23 +0100
+
+cloud-init (19.3-1) unstable; urgency=medium
+
+  * New upstream release.
+
+ -- Thomas Goirand <zigo@debian.org>  Tue, 10 Dec 2019 08:36:53 +0100
+
+cloud-init (19.2-4) unstable; urgency=medium
+
+  * Removed the last bit of Python2 build-depends (Closes: #942968).
+
+ -- Thomas Goirand <zigo@debian.org>  Wed, 23 Oct 2019 12:19:08 +0200
+
+cloud-init (19.2-3) unstable; urgency=medium
+
+  * Remove the patch for sources.list, and activate the option to preserve
+    the sources.list by default (ie: apt_preserve_sources_list: true).
+
+ -- Thomas Goirand <zigo@debian.org>  Wed, 16 Oct 2019 21:44:00 +0200
+
+cloud-init (19.2-2) unstable; urgency=medium
+
+  * Comment out backports by default in apt/sources.list.
+  * Standards-Version bump to 4.4.1.
+
+ -- Thomas Goirand <zigo@debian.org>  Wed, 16 Oct 2019 20:55:55 +0200
+
+cloud-init (19.2-1) unstable; urgency=medium
+
+  * New upstream release.
+  * Drop 0008-opennebula-also-exclude-epochseconds-from-changed-en.patch
+    applied upstream.
+  * Drop CVE-2019-0816_Filter_list_of_ssh_keys_pulled_from_fabric.patch also
+    applied upstream.
+  * Rebased patches:
+    - 0009-Drop-all-unused-extended-version-handling.patch
+    - 0012-Fix-message-when-a-local-is-missing.patch
+
+ -- Thomas Goirand <zigo@debian.org>  Thu, 29 Aug 2019 08:47:15 +0200
+
 cloud-init (18.3-6) unstable; urgency=high
 
   * CVE-2019-0816: Extraneous SSH Public Keys added to Authorized Keys file.

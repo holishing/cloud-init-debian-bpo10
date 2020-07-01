@@ -6,10 +6,8 @@
 
 import copy
 import os
+import pickle
 import sys
-
-import six
-from six.moves import cPickle as pickle
 
 from cloudinit.settings import (
     FREQUENCIES, CLOUD_CONFIG, PER_INSTANCE, RUN_CLOUD_CONFIG)
@@ -17,10 +15,14 @@ from cloudinit.settings import (
 from cloudinit import handlers
 
 # Default handlers (used if not overridden)
-from cloudinit.handlers import boot_hook as bh_part
-from cloudinit.handlers import cloud_config as cc_part
-from cloudinit.handlers import shell_script as ss_part
-from cloudinit.handlers import upstart_job as up_part
+from cloudinit.handlers.boot_hook import BootHookPartHandler
+from cloudinit.handlers.cloud_config import CloudConfigPartHandler
+from cloudinit.handlers.jinja_template import JinjaTemplatePartHandler
+from cloudinit.handlers.shell_script import ShellScriptPartHandler
+from cloudinit.handlers.upstart_job import UpstartJobPartHandler
+
+from cloudinit.event import EventType
+from cloudinit.sources import NetworkConfigSource
 
 from cloudinit import cloud
 from cloudinit import config
@@ -85,7 +87,7 @@ class Init(object):
             # from whatever it was to a new set...
             if self.datasource is not NULL_DATA_SOURCE:
                 self.datasource.distro = self._distro
-                self.datasource.sys_cfg = system_config
+                self.datasource.sys_cfg = self.cfg
         return self._distro
 
     @property
@@ -411,12 +413,17 @@ class Init(object):
             'datasource': self.datasource,
         })
         # TODO(harlowja) Hmmm, should we dynamically import these??
+        cloudconfig_handler = CloudConfigPartHandler(**opts)
+        shellscript_handler = ShellScriptPartHandler(**opts)
         def_handlers = [
-            cc_part.CloudConfigPartHandler(**opts),
-            ss_part.ShellScriptPartHandler(**opts),
-            bh_part.BootHookPartHandler(**opts),
-            up_part.UpstartJobPartHandler(**opts),
+            cloudconfig_handler,
+            shellscript_handler,
+            BootHookPartHandler(**opts),
+            UpstartJobPartHandler(**opts),
         ]
+        opts.update(
+            {'sub_handlers': [cloudconfig_handler, shellscript_handler]})
+        def_handlers.append(JinjaTemplatePartHandler(**opts))
         return def_handlers
 
     def _default_userdata_handlers(self):
@@ -492,7 +499,7 @@ class Init(object):
             # Init the handlers first
             for (_ctype, mod) in c_handlers.items():
                 if mod in c_handlers.initialized:
-                    # Avoid initing the same module twice (if said module
+                    # Avoid initiating the same module twice (if said module
                     # is registered to more than one content-type).
                     continue
                 handlers.call_begin(mod, data, frequency)
@@ -508,7 +515,7 @@ class Init(object):
                 # The default frequency if handlers don't have one
                 'frequency': frequency,
                 # This will be used when new handlers are found
-                # to help write there contents to files with numbered
+                # to help write their contents to files with numbered
                 # names...
                 'handlercount': 0,
                 'excluded': excluded,
@@ -540,11 +547,15 @@ class Init(object):
         with events.ReportEventStack("consume-user-data",
                                      "reading and applying user-data",
                                      parent=self.reporter):
+            if util.get_cfg_option_bool(self.cfg, 'allow_userdata', True):
                 self._consume_userdata(frequency)
+            else:
+                LOG.debug('allow_userdata = False: discarding user-data')
+
         with events.ReportEventStack("consume-vendor-data",
                                      "reading and applying vendor-data",
                                      parent=self.reporter):
-                self._consume_vendordata(frequency)
+            self._consume_vendordata(frequency)
 
         # Perform post-consumption adjustments so that
         # modules that run during the init stage reflect
@@ -622,37 +633,75 @@ class Init(object):
         if os.path.exists(disable_file):
             return (None, disable_file)
 
-        cmdline_cfg = ('cmdline', cmdline.read_kernel_cmdline_config())
-        dscfg = ('ds', None)
+        available_cfgs = {
+            NetworkConfigSource.cmdline: cmdline.read_kernel_cmdline_config(),
+            NetworkConfigSource.initramfs: cmdline.read_initramfs_config(),
+            NetworkConfigSource.ds: None,
+            NetworkConfigSource.system_cfg: self.cfg.get('network'),
+        }
+
         if self.datasource and hasattr(self.datasource, 'network_config'):
-            dscfg = ('ds', self.datasource.network_config)
-        sys_cfg = ('system_cfg', self.cfg.get('network'))
+            available_cfgs[NetworkConfigSource.ds] = (
+                self.datasource.network_config)
 
-        for loc, ncfg in (cmdline_cfg, sys_cfg, dscfg):
+        if self.datasource:
+            order = self.datasource.network_config_sources
+        else:
+            order = sources.DataSource.network_config_sources
+        for cfg_source in order:
+            if not hasattr(NetworkConfigSource, cfg_source):
+                LOG.warning('data source specifies an invalid network'
+                            ' cfg_source: %s', cfg_source)
+                continue
+            if cfg_source not in available_cfgs:
+                LOG.warning('data source specifies an unavailable network'
+                            ' cfg_source: %s', cfg_source)
+                continue
+            ncfg = available_cfgs[cfg_source]
             if net.is_disabled_cfg(ncfg):
-                LOG.debug("network config disabled by %s", loc)
-                return (None, loc)
+                LOG.debug("network config disabled by %s", cfg_source)
+                return (None, cfg_source)
             if ncfg:
-                return (ncfg, loc)
-        return (self.distro.generate_fallback_config(), "fallback")
+                return (ncfg, cfg_source)
+        return (self.distro.generate_fallback_config(),
+                NetworkConfigSource.fallback)
 
-    def apply_network_config(self, bring_up):
-        netcfg, src = self._find_networking_config()
-        if netcfg is None:
-            LOG.info("network config is disabled by %s", src)
-            return
-
+    def _apply_netcfg_names(self, netcfg):
         try:
             LOG.debug("applying net config names for %s", netcfg)
             self.distro.apply_network_config_names(netcfg)
         except Exception as e:
             LOG.warning("Failed to rename devices: %s", e)
 
-        if (self.datasource is not NULL_DATA_SOURCE and
-                not self.is_new_instance()):
-            LOG.debug("not a new instance. network config is not applied.")
+    def apply_network_config(self, bring_up):
+        # get a network config
+        netcfg, src = self._find_networking_config()
+        if netcfg is None:
+            LOG.info("network config is disabled by %s", src)
             return
 
+        # request an update if needed/available
+        if self.datasource is not NULL_DATA_SOURCE:
+            if not self.is_new_instance():
+                if not self.datasource.update_metadata([EventType.BOOT]):
+                    LOG.debug(
+                        "No network config applied. Neither a new instance"
+                        " nor datasource network update on '%s' event",
+                        EventType.BOOT)
+                    # nothing new, but ensure proper names
+                    self._apply_netcfg_names(netcfg)
+                    return
+                else:
+                    # refresh netcfg after update
+                    netcfg, src = self._find_networking_config()
+
+        # ensure all physical devices in config are present
+        net.wait_for_physdevs(netcfg)
+
+        # apply renames from config
+        self._apply_netcfg_names(netcfg)
+
+        # rendering config
         LOG.info("Applying network configuration from %s bringup=%s: %s",
                  src, bring_up, netcfg)
         try:
@@ -707,7 +756,7 @@ class Modules(object):
         for item in cfg_mods:
             if not item:
                 continue
-            if isinstance(item, six.string_types):
+            if isinstance(item, str):
                 module_list.append({
                     'mod': item.strip(),
                 })

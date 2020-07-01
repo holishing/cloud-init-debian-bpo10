@@ -4,7 +4,7 @@ PYTHON3S:=$(shell py3versions -vr)
 export PYBUILD_INSTALL_ARGS=--init-system=systemd,sysvinit_deb
 
 %:
-	dh $@ --with python3,systemd --buildsystem pybuild
+	dh $@ --with python3 --buildsystem pybuild
 
 override_dh_auto_install:
 	dh_auto_install
@@ -16,7 +16,7 @@ ifeq (,$(filter nocheck,$(DEB_BUILD_OPTIONS)))
 	set -e && set -x && for pyvers in $(PYTHON3S); do \
 		PYMAJOR=`echo $$pyvers | cut -d'.' -f1` ; \
 		echo "===> Testing with python$$pyvers (python$$PYMAJOR)" ; \
-		PYTHON=python$$pyvers PYTHONPATH=. python$$pyvers -m nose -v tests/unittests ; \
+		PYTHON=python$$pyvers PYTHONPATH=. python$$pyvers -m pytest -v tests/unittests ; \
 	done
 endif
 

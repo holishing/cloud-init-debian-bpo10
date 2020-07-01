@@ -1,10 +1,7 @@
 0002-disable-rhel-set-hostname-test.patch
 0006-Skip-test_apt_v3_mirror_search_dns.patch
 0007-Skip-Cloudstack-tests-that-expect-network.patch
-0009-Drop-all-unused-extended-version-handling.patch
-0012-Fix-message-when-a-local-is-missing.patch
 fix-sysvinit-dependencies.patch
 cloud-init-before-chronyd.patch
-0008-opennebula-also-exclude-epochseconds-from-changed-en.patch
-CVE-2019-0816_Filter_list_of_ssh_keys_pulled_from_fabric.patch
-0010-helpers-openstack-Treat-unknown-link-types-as-physic.patch
+0009-Drop-all-unused-extended-version-handling.patch
+0012-Fix-message-when-a-local-is-missing.patch

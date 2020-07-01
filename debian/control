@@ -2,21 +2,20 @@ Source: cloud-init
 Maintainer: Debian Cloud Team <debian-cloud@lists.debian.org>
 Uploaders:
  Bastian Blank <waldi@debian.org>,
- Charles Plessy <plessy@debian.org>,
  Thomas Goirand <zigo@debian.org>,
+ Noah Meyerhans <noahm@debian.org>,
 Section: admin
 Priority: optional
 Build-Depends:
  debhelper (>= 10),
  dh-python,
  iproute2,
- pep8,
  po-debconf,
  pylint,
  python3-all,
+ python3-pep8,
  python3-setuptools,
 Build-Depends-Indep:
- python-pyflakes,
  python3-configobj,
  python3-contextlib2,
  python3-httpretty (>= 0.9.5),
@@ -24,16 +23,16 @@ Build-Depends-Indep:
  python3-jsonpatch,
  python3-jsonschema,
  python3-mock,
- python3-nose,
  python3-oauthlib,
- python3-pep8,
  python3-prettytable,
+ python3-pyflakes,
+ python3-pytest,
  python3-requests,
  python3-serial,
  python3-six,
  python3-unittest2,
  python3-yaml,
-Standards-Version: 4.0.0
+Standards-Version: 4.5.0
 Vcs-Browser: https://salsa.debian.org/cloud-team/cloud-init
 Vcs-Git: https://salsa.debian.org/cloud-team/cloud-init.git
 Homepage: https://launchpad.net/cloud-init
@@ -41,7 +40,6 @@ Homepage: https://launchpad.net/cloud-init
 Package: cloud-init
 Architecture: all
 Depends:
- cloud-guest-utils,
  fdisk | util-linux (<< 2.29.2-3~),
  gdisk,
  ifupdown,
@@ -53,6 +51,7 @@ Depends:
  ${misc:Depends},
  ${python3:Depends},
 Recommends:
+ cloud-guest-utils,
  eatmydata,
  sudo,
 Suggests:

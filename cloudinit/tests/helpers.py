@@ -4,55 +4,34 @@ from __future__ import print_function
 
 import functools
 import httpretty
+import io
 import logging
 import os
+import random
 import shutil
+import string
 import sys
 import tempfile
 import time
 import unittest
-
-import mock
-import six
-import unittest2
-
-try:
-    from contextlib import ExitStack
-except ImportError:
-    from contextlib2 import ExitStack
-
-try:
-    from configparser import ConfigParser
-except ImportError:
-    from ConfigParser import ConfigParser
+from contextlib import ExitStack, contextmanager
+from unittest import mock
+from unittest.util import strclass
 
 from cloudinit.config.schema import (
     SchemaValidationError, validate_cloudconfig_schema)
+from cloudinit import cloud
+from cloudinit import distros
 from cloudinit import helpers as ch
+from cloudinit.sources import DataSourceNone
+from cloudinit.templater import JINJA_AVAILABLE
 from cloudinit import util
 
+_real_subp = util.subp
+
 # Used for skipping tests
-SkipTest = unittest2.SkipTest
-
-# Used for detecting different python versions
-PY2 = False
-PY26 = False
-PY27 = False
-PY3 = False
-
-_PY_VER = sys.version_info
-_PY_MAJOR, _PY_MINOR, _PY_MICRO = _PY_VER[0:3]
-if (_PY_MAJOR, _PY_MINOR) <= (2, 6):
-    if (_PY_MAJOR, _PY_MINOR) == (2, 6):
-        PY26 = True
-    if (_PY_MAJOR, _PY_MINOR) >= (2, 0):
-        PY2 = True
-else:
-    if (_PY_MAJOR, _PY_MINOR) == (2, 7):
-        PY27 = True
-        PY2 = True
-    if (_PY_MAJOR, _PY_MINOR) >= (3, 0):
-        PY3 = True
+SkipTest = unittest.SkipTest
+skipIf = unittest.skipIf
 
 
 # Makes the old path start
@@ -83,13 +62,13 @@ def retarget_many_wrapper(new_base, am, old_func):
             # Python 3 some of these now accept file-descriptors (integers).
             # That breaks rebase_path() so in lieu of a better solution, just
             # don't rebase if we get a fd.
-            if isinstance(path, six.string_types):
+            if isinstance(path, str):
                 n_args[i] = rebase_path(path, new_base)
         return old_func(*n_args, **kwds)
     return wrapper
 
 
-class TestCase(unittest2.TestCase):
+class TestCase(unittest.TestCase):
 
     def reset_global_state(self):
         """Reset any global state to its original settings.
@@ -112,6 +91,9 @@ class TestCase(unittest2.TestCase):
         super(TestCase, self).setUp()
         self.reset_global_state()
 
+    def shortDescription(self):
+        return strclass(self.__class__) + '.' + self._testMethodName
+
     def add_patch(self, target, attr, *args, **kwargs):
         """Patches specified target object and sets it as attr on test
         instance also schedules cleanup"""
@@ -122,16 +104,6 @@ class TestCase(unittest2.TestCase):
         self.addCleanup(m.stop)
         setattr(self, attr, p)
 
-    # prefer python3 read_file over readfp but allow fallback
-    def parse_and_read(self, contents):
-        parser = ConfigParser()
-        if hasattr(parser, 'read_file'):
-            parser.read_file(contents)
-        elif hasattr(parser, 'readfp'):
-            # pylint: disable=W1505
-            parser.readfp(contents)
-        return parser
-
 
 class CiTestCase(TestCase):
     """This is the preferred test case base class unless user
@@ -140,23 +112,65 @@ class CiTestCase(TestCase):
     # Subclass overrides for specific test behavior
     # Whether or not a unit test needs logfile setup
     with_logs = False
+    allowed_subp = False
+    SUBP_SHELL_TRUE = "shell=true"
+
+    @contextmanager
+    def allow_subp(self, allowed_subp):
+        orig = self.allowed_subp
+        try:
+            self.allowed_subp = allowed_subp
+            yield
+        finally:
+            self.allowed_subp = orig
 
     def setUp(self):
         super(CiTestCase, self).setUp()
         if self.with_logs:
             # Create a log handler so unit tests can search expected logs.
             self.logger = logging.getLogger()
-            self.logs = six.StringIO()
+            self.logs = io.StringIO()
             formatter = logging.Formatter('%(levelname)s: %(message)s')
             handler = logging.StreamHandler(self.logs)
             handler.setFormatter(formatter)
             self.old_handlers = self.logger.handlers
             self.logger.handlers = [handler]
+        if self.allowed_subp is True:
+            util.subp = _real_subp
+        else:
+            util.subp = self._fake_subp
+
+    def _fake_subp(self, *args, **kwargs):
+        if 'args' in kwargs:
+            cmd = kwargs['args']
+        else:
+            cmd = args[0]
+
+        if not isinstance(cmd, str):
+            cmd = cmd[0]
+        pass_through = False
+        if not isinstance(self.allowed_subp, (list, bool)):
+            raise TypeError("self.allowed_subp supports list or bool.")
+        if isinstance(self.allowed_subp, bool):
+            pass_through = self.allowed_subp
+        else:
+            pass_through = (
+                (cmd in self.allowed_subp) or
+                (self.SUBP_SHELL_TRUE in self.allowed_subp and
+                 kwargs.get('shell')))
+        if pass_through:
+            return _real_subp(*args, **kwargs)
+        raise Exception(
+            "called subp. set self.allowed_subp=True to allow\n subp(%s)" %
+            ', '.join([str(repr(a)) for a in args] +
+                      ["%s=%s" % (k, repr(v)) for k, v in kwargs.items()]))
 
     def tearDown(self):
         if self.with_logs:
             # Remove the handler we setup
             logging.getLogger().handlers = self.old_handlers
+            logging.getLogger().level = None
+        util.subp = _real_subp
         super(CiTestCase, self).tearDown()
 
     def tmp_dir(self, dir=None, cleanup=True):
@@ -166,7 +180,8 @@ class CiTestCase(TestCase):
                 prefix="ci-%s." % self.__class__.__name__)
         else:
             tmpd = tempfile.mkdtemp(dir=dir)
-        self.addCleanup(functools.partial(shutil.rmtree, tmpd))
+        self.addCleanup(
+            functools.partial(shutil.rmtree, tmpd, ignore_errors=True))
         return tmpd
 
     def tmp_path(self, path, dir=None):
@@ -177,15 +192,34 @@ class CiTestCase(TestCase):
             dir = self.tmp_dir()
         return os.path.normpath(os.path.abspath(os.path.join(dir, path)))
 
-    def sys_exit(self, code):
-        """Provide a wrapper around sys.exit for python 2.6
+    def tmp_cloud(self, distro, sys_cfg=None, metadata=None):
+        """Create a cloud with tmp working directory paths.
 
-        In 2.6, this code would produce 'cm.exception' with value int(2)
-        rather than the SystemExit that was raised by sys.exit(2).
-            with assertRaises(SystemExit) as cm:
-                sys.exit(2)
+        @param distro: Name of the distro to attach to the cloud.
+        @param metadata: Optional metadata to set on the datasource.
+
+        @return: The built cloud instance.
         """
-        raise SystemExit(code)
+        self.new_root = self.tmp_dir()
+        if not sys_cfg:
+            sys_cfg = {}
+        tmp_paths = {}
+        for var in ['templates_dir', 'run_dir', 'cloud_dir']:
+            tmp_paths[var] = self.tmp_path(var, dir=self.new_root)
+            util.ensure_dir(tmp_paths[var])
+        self.paths = ch.Paths(tmp_paths)
+        cls = distros.fetch(distro)
+        mydist = cls(distro, sys_cfg, self.paths)
+        myds = DataSourceNone.DataSourceNone(sys_cfg, mydist, self.paths)
+        if metadata:
+            myds.metadata.update(metadata)
+        return cloud.Cloud(myds, self.paths, sys_cfg, mydist, None)
+
+    @classmethod
+    def random_string(cls, length=8):
+        """ return a random lowercase string with default length of 8"""
+        return ''.join(
+            random.choice(string.ascii_lowercase) for _ in range(length))
 
 
 class ResourceUsingTestCase(CiTestCase):
@@ -282,8 +316,9 @@ class FilesystemMockingTestCase(ResourceUsingTestCase):
 
     def patchOpen(self, new_root):
         trap_func = retarget_many_wrapper(new_root, 1, open)
-        name = 'builtins.open' if PY3 else '__builtin__.open'
-        self.patched_funcs.enter_context(mock.patch(name, trap_func))
+        self.patched_funcs.enter_context(
+            mock.patch('builtins.open', trap_func)
+        )
 
     def patchStdoutAndStderr(self, stdout=None, stderr=None):
         if stdout is not None:
@@ -298,7 +333,15 @@ class FilesystemMockingTestCase(ResourceUsingTestCase):
             root = self.tmp_dir()
         self.patchUtils(root)
         self.patchOS(root)
+        self.patchOpen(root)
         return root
+
+    @contextmanager
+    def reRooted(self, root=None):
+        try:
+            yield self.reRoot(root)
+        finally:
+            self.patched_funcs.close()
 
 
 class HttprettyTestCase(CiTestCase):
@@ -324,7 +367,7 @@ class HttprettyTestCase(CiTestCase):
         super(HttprettyTestCase, self).tearDown()
 
 
-class SchemaTestCaseMixin(unittest2.TestCase):
+class SchemaTestCaseMixin(unittest.TestCase):
 
     def assertSchemaValid(self, cfg, msg="Valid Schema failed validation."):
         """Assert the config is valid per self.schema.
@@ -349,7 +392,7 @@ def populate_dir(path, files):
         p = os.path.sep.join([path, name])
         util.ensure_dir(os.path.dirname(p))
         with open(p, "wb") as fp:
-            if isinstance(content, six.binary_type):
+            if isinstance(content, bytes):
                 fp.write(content)
             else:
                 fp.write(content.encode('utf-8'))
@@ -426,21 +469,6 @@ def readResource(name, mode='r'):
 
 
 try:
-    skipIf = unittest.skipIf
-except AttributeError:
-    # Python 2.6.  Doesn't have to be high fidelity.
-    def skipIf(condition, reason):
-        def decorator(func):
-            def wrapper(*args, **kws):
-                if condition:
-                    return func(*args, **kws)
-                else:
-                    print(reason, file=sys.stderr)
-            return wrapper
-        return decorator
-
-
-try:
     import jsonschema
     assert jsonschema  # avoid pyflakes error F401: import unused
     _missing_jsonschema_dep = False
@@ -453,6 +481,14 @@ def skipUnlessJsonSchema():
         _missing_jsonschema_dep, "No python-jsonschema dependency present.")
 
 
+def skipUnlessJinja():
+    return skipIf(not JINJA_AVAILABLE, "No jinja dependency present.")
+
+
+def skipIfJinja():
+    return skipIf(JINJA_AVAILABLE, "Jinja dependency present.")
+
+
 # older versions of mock do not have the useful 'assert_not_called'
 if not hasattr(mock.Mock, 'assert_not_called'):
     def __mock_assert_not_called(mmock):
@@ -462,14 +498,5 @@ if not hasattr(mock.Mock, 'assert_not_called'):
                    (mmock._mock_name or 'mock', mmock.call_count))
             raise AssertionError(msg)
     mock.Mock.assert_not_called = __mock_assert_not_called
-
-
-# older unittest2.TestCase (centos6) have only the now-deprecated
-# assertRaisesRegexp. Simple assignment makes pylint complain, about
-# users of assertRaisesRegex so we use getattr to trick it.
-# https://github.com/PyCQA/pylint/issues/1946
-if not hasattr(unittest2.TestCase, 'assertRaisesRegex'):
-    unittest2.TestCase.assertRaisesRegex = (
-        getattr(unittest2.TestCase, 'assertRaisesRegexp'))
 
 # vi: ts=4 expandtab

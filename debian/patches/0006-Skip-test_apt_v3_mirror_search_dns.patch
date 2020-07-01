@@ -6,13 +6,13 @@ Subject: Skip test_apt_v3_mirror_search_dns
  tests/unittests/test_handler/test_handler_apt_source_v3.py | 4 ++++
  1 file changed, 4 insertions(+)
 
-diff --git a/tests/unittests/test_handler/test_handler_apt_source_v3.py b/tests/unittests/test_handler/test_handler_apt_source_v3.py
-index 7a64c23..f85ec31 100644
---- a/tests/unittests/test_handler/test_handler_apt_source_v3.py
-+++ b/tests/unittests/test_handler/test_handler_apt_source_v3.py
-@@ -944,6 +944,10 @@ deb http://ubuntu.com/ubuntu/ xenial-proposed main""")
- 
-     def test_apt_v3_mirror_search_dns(self):
+Index: cloud-init/tests/unittests/test_handler/test_handler_apt_source_v3.py
+===================================================================
+--- cloud-init.orig/tests/unittests/test_handler/test_handler_apt_source_v3.py
++++ cloud-init/tests/unittests/test_handler/test_handler_apt_source_v3.py
+@@ -952,6 +952,10 @@ deb http://ubuntu.com/ubuntu/ xenial-pro
+     @mock.patch("cloudinit.util.get_hostname", return_value='abc.localdomain')
+     def test_apt_v3_mirror_search_dns(self, m_get_hostname):
          """test_apt_v3_mirror_search_dns - Test searching dns patterns"""
 +
 +        from cloudinit.tests.helpers import SkipTest

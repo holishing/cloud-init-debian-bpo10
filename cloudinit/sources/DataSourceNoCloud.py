@@ -35,6 +35,17 @@ class DataSourceNoCloud(sources.DataSource):
         root = sources.DataSource.__str__(self)
         return "%s [seed=%s][dsmode=%s]" % (root, self.seed, self.dsmode)
 
+    def _get_devices(self, label):
+        fslist = util.find_devs_with("TYPE=vfat")
+        fslist.extend(util.find_devs_with("TYPE=iso9660"))
+
+        label_list = util.find_devs_with("LABEL=%s" % label.upper())
+        label_list.extend(util.find_devs_with("LABEL=%s" % label.lower()))
+
+        devlist = list(set(fslist) & set(label_list))
+        devlist.sort(reverse=True)
+        return devlist
+
     def _get_data(self):
         defaults = {
             "instance-id": "nocloud",
@@ -99,18 +110,7 @@ class DataSourceNoCloud(sources.DataSource):
 
         label = self.ds_cfg.get('fs_label', "cidata")
         if label is not None:
-            # Query optical drive to get it in blkid cache for 2.6 kernels
-            util.find_devs_with(path="/dev/sr0")
-            util.find_devs_with(path="/dev/sr1")
-
-            fslist = util.find_devs_with("TYPE=vfat")
-            fslist.extend(util.find_devs_with("TYPE=iso9660"))
-
-            label_list = util.find_devs_with("LABEL=%s" % label)
-            devlist = list(set(fslist) & set(label_list))
-            devlist.sort(reverse=True)
-
-            for dev in devlist:
+            for dev in self._get_devices(label):
                 try:
                     LOG.debug("Attempting to use data from %s", dev)
 
@@ -118,9 +118,8 @@ class DataSourceNoCloud(sources.DataSource):
                         seeded = util.mount_cb(dev, _pp2d_callback,
                                                pp2d_kwargs)
                     except ValueError:
-                        if dev in label_list:
-                            LOG.warning("device %s with label=%s not a"
-                                        "valid seed.", dev, label)
+                        LOG.warning("device %s with label=%s not a "
+                                    "valid seed.", dev, label)
                         continue
 
                     mydata = _merge_new_seed(mydata, seeded)
@@ -186,6 +185,27 @@ class DataSourceNoCloud(sources.DataSource):
         self._network_eni = mydata['meta-data'].get('network-interfaces')
         return True
 
+    @property
+    def platform_type(self):
+        # Handle upgrade path of pickled ds
+        if not hasattr(self, '_platform_type'):
+            self._platform_type = None
+        if not self._platform_type:
+            self._platform_type = 'lxd' if util.is_lxd() else 'nocloud'
+        return self._platform_type
+
+    def _get_cloud_name(self):
+        """Return unknown when 'cloud-name' key is absent from metadata."""
+        return sources.METADATA_UNKNOWN
+
+    def _get_subplatform(self):
+        """Return the subplatform metadata source details."""
+        if self.seed.startswith('/dev'):
+            subplatform_type = 'config-disk'
+        else:
+            subplatform_type = 'seed-dir'
+        return '%s (%s)' % (subplatform_type, self.seed)
+
     def check_instance_id(self, sys_cfg):
         # quickly (local check only) if self.instance_id is still valid
         # we check kernel command line or files.
@@ -237,7 +257,7 @@ def load_cmdline_data(fill, cmdline=None):
              ("ds=nocloud-net", sources.DSMODE_NETWORK)]
     for idstr, dsmode in pairs:
         if parse_cmdline_data(idstr, fill, cmdline):
-            # if dsmode was explicitly in the commanad line, then
+            # if dsmode was explicitly in the command line, then
             # prefer it to the dsmode based on the command line id
             if 'dsmode' not in fill:
                 fill['dsmode'] = dsmode
@@ -290,6 +310,35 @@ def parse_cmdline_data(ds_id, fill, cmdline=None):
     return True
 
 
+def _maybe_remove_top_network(cfg):
+    """If network-config contains top level 'network' key, then remove it.
+
+    Some providers of network configuration may provide a top level
+    'network' key (LP: #1798117) even though it is not necessary.
+
+    Be friendly and remove it if it really seems so.
+
+    Return the original value if no change or the updated value if changed."""
+    nullval = object()
+    network_val = cfg.get('network', nullval)
+    if network_val is nullval:
+        return cfg
+    bmsg = 'Top level network key in network-config %s: %s'
+    if not isinstance(network_val, dict):
+        LOG.debug(bmsg, "was not a dict", cfg)
+        return cfg
+    if len(list(cfg.keys())) != 1:
+        LOG.debug(bmsg, "had multiple top level keys", cfg)
+        return cfg
+    if network_val.get('config') == "disabled":
+        LOG.debug(bmsg, "was config/disabled", cfg)
+    elif not all(('config' in network_val, 'version' in network_val)):
+        LOG.debug(bmsg, "but missing 'config' or 'version'", cfg)
+        return cfg
+    LOG.debug(bmsg, "fixed by removing shifting network.", cfg)
+    return network_val
+
+
 def _merge_new_seed(cur, seeded):
     ret = cur.copy()
 
@@ -299,7 +348,8 @@ def _merge_new_seed(cur, seeded):
     ret['meta-data'] = util.mergemanydict([cur['meta-data'], newmd])
 
     if seeded.get('network-config'):
-        ret['network-config'] = util.load_yaml(seeded['network-config'])
+        ret['network-config'] = _maybe_remove_top_network(
+            util.load_yaml(seeded.get('network-config')))
 
     if 'user-data' in seeded:
         ret['user-data'] = seeded['user-data']
@@ -311,7 +361,7 @@ def _merge_new_seed(cur, seeded):
 class DataSourceNoCloudNet(DataSourceNoCloud):
     def __init__(self, sys_cfg, distro, paths):
         DataSourceNoCloud.__init__(self, sys_cfg, distro, paths)
-        self.supported_seed_starts = ("http://", "https://", "ftp://")
+        self.supported_seed_starts = ("http://", "https://")
 
 
 # Used to match classes to dependencies

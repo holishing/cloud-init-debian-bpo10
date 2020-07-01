@@ -11,13 +11,8 @@ import shutil
 import socket
 import tempfile
 
-from unittest import TestCase
-
-try:
-    from unittest import mock
-except ImportError:
-    import mock
-from mock import call
+from unittest import TestCase, mock
+from unittest.mock import call
 
 from cloudinit import cloud
 from cloudinit import distros
@@ -48,6 +43,10 @@ ADD_APT_REPO_MATCH = r"^[\w-]+:\w"
 
 TARGET = None
 
+MOCK_LSB_RELEASE_DATA = {
+    'id': 'Ubuntu', 'description': 'Ubuntu 18.04.1 LTS',
+    'release': '18.04', 'codename': 'bionic'}
+
 
 class TestAptSourceConfig(t_help.FilesystemMockingTestCase):
     """TestAptSourceConfig
@@ -64,6 +63,9 @@ class TestAptSourceConfig(t_help.FilesystemMockingTestCase):
         self.aptlistfile3 = os.path.join(self.tmp, "single-deb3.list")
         self.join = os.path.join
         self.matcher = re.compile(ADD_APT_REPO_MATCH).search
+        self.add_patch(
+            'cloudinit.config.cc_apt_configure.util.lsb_release',
+            'm_lsb_release', return_value=MOCK_LSB_RELEASE_DATA.copy())
 
     @staticmethod
     def _add_apt_sources(*args, **kwargs):
@@ -76,7 +78,7 @@ class TestAptSourceConfig(t_help.FilesystemMockingTestCase):
         Get the most basic default mrror and release info to be used in tests
         """
         params = {}
-        params['RELEASE'] = util.lsb_release()['codename']
+        params['RELEASE'] = MOCK_LSB_RELEASE_DATA['release']
         arch = 'amd64'
         params['MIRROR'] = cc_apt_configure.\
             get_default_mirrors(arch)["PRIMARY"]
@@ -446,14 +448,14 @@ class TestAptSourceConfig(t_help.FilesystemMockingTestCase):
         self.assertFalse(os.path.isfile(self.aptlistfile2))
         self.assertFalse(os.path.isfile(self.aptlistfile3))
 
-    @mock.patch("cloudinit.config.cc_apt_configure.util.get_architecture")
-    def test_apt_v3_list_rename(self, m_get_architecture):
+    @mock.patch("cloudinit.config.cc_apt_configure.util.get_dpkg_architecture")
+    def test_apt_v3_list_rename(self, m_get_dpkg_architecture):
         """test_apt_v3_list_rename - Test find mirror and apt list renaming"""
         pre = "/var/lib/apt/lists"
         # filenames are archive dependent
 
         arch = 's390x'
-        m_get_architecture.return_value = arch
+        m_get_dpkg_architecture.return_value = arch
         component = "ubuntu-ports"
         archive = "ports.ubuntu.com"
 
@@ -464,7 +466,7 @@ class TestAptSourceConfig(t_help.FilesystemMockingTestCase):
                              'uri':
                              'http://testsec.ubuntu.com/%s/' % component}]}
         post = ("%s_dists_%s-updates_InRelease" %
-                (component, util.lsb_release()['codename']))
+                (component, MOCK_LSB_RELEASE_DATA['codename']))
         fromfn = ("%s/%s_%s" % (pre, archive, post))
         tofn = ("%s/test.ubuntu.com_%s" % (pre, post))
 
@@ -480,16 +482,17 @@ class TestAptSourceConfig(t_help.FilesystemMockingTestCase):
         with mock.patch.object(os, 'rename') as mockren:
             with mock.patch.object(glob, 'glob',
                                    return_value=[fromfn]):
-                cc_apt_configure.rename_apt_lists(mirrors, TARGET)
+                cc_apt_configure.rename_apt_lists(mirrors, TARGET, arch)
 
         mockren.assert_any_call(fromfn, tofn)
 
-    @mock.patch("cloudinit.config.cc_apt_configure.util.get_architecture")
-    def test_apt_v3_list_rename_non_slash(self, m_get_architecture):
+    @mock.patch("cloudinit.config.cc_apt_configure.util.get_dpkg_architecture")
+    def test_apt_v3_list_rename_non_slash(self, m_get_dpkg_architecture):
         target = os.path.join(self.tmp, "rename_non_slash")
         apt_lists_d = os.path.join(target, "./" + cc_apt_configure.APT_LISTS)
 
-        m_get_architecture.return_value = 'amd64'
+        arch = 'amd64'
+        m_get_dpkg_architecture.return_value = arch
 
         mirror_path = "some/random/path/"
         primary = "http://test.ubuntu.com/" + mirror_path
@@ -525,7 +528,7 @@ class TestAptSourceConfig(t_help.FilesystemMockingTestCase):
             fpath = os.path.join(apt_lists_d, opre + suff)
             util.write_file(fpath, content=fpath)
 
-        cc_apt_configure.rename_apt_lists(mirrors, target)
+        cc_apt_configure.rename_apt_lists(mirrors, target, arch)
         found = sorted(os.listdir(apt_lists_d))
         self.assertEqual(expected, found)
 
@@ -618,10 +621,12 @@ class TestAptSourceConfig(t_help.FilesystemMockingTestCase):
         self.assertEqual(mirrors['SECURITY'],
                          smir)
 
-    @mock.patch("cloudinit.config.cc_apt_configure.util.get_architecture")
-    def test_apt_v3_get_def_mir_non_intel_no_arch(self, m_get_architecture):
+    @mock.patch("cloudinit.config.cc_apt_configure.util.get_dpkg_architecture")
+    def test_apt_v3_get_def_mir_non_intel_no_arch(
+        self, m_get_dpkg_architecture
+    ):
         arch = 'ppc64el'
-        m_get_architecture.return_value = arch
+        m_get_dpkg_architecture.return_value = arch
         expected = {'PRIMARY': 'http://ports.ubuntu.com/ubuntu-ports',
                     'SECURITY': 'http://ports.ubuntu.com/ubuntu-ports'}
         self.assertEqual(expected, cc_apt_configure.get_default_mirrors())
@@ -665,7 +670,7 @@ class TestAptSourceConfig(t_help.FilesystemMockingTestCase):
                "security": [{'arches': ["default"],
                              "search": ["sfailme", smir]}]}
 
-        with mock.patch.object(cc_apt_configure, 'search_for_mirror',
+        with mock.patch.object(cc_apt_configure.util, 'search_for_mirror',
                                side_effect=[pmir, smir]) as mocksearch:
             mirrors = cc_apt_configure.find_apt_mirror_info(cfg, None,
                                                             'amd64')
@@ -704,7 +709,7 @@ class TestAptSourceConfig(t_help.FilesystemMockingTestCase):
         mockgm.assert_has_calls(calls)
 
         # should not be called, since primary is specified
-        with mock.patch.object(cc_apt_configure,
+        with mock.patch.object(cc_apt_configure.util,
                                'search_for_mirror') as mockse:
             mirrors = cc_apt_configure.find_apt_mirror_info(cfg, None, arch)
         mockse.assert_not_called()
@@ -942,7 +947,8 @@ deb http://ubuntu.com/ubuntu/ xenial-proposed main""")
         self.assertEqual(
             orig, cc_apt_configure.disable_suites(["proposed"], orig, rel))
 
-    def test_apt_v3_mirror_search_dns(self):
+    @mock.patch("cloudinit.util.get_hostname", return_value='abc.localdomain')
+    def test_apt_v3_mirror_search_dns(self, m_get_hostname):
         """test_apt_v3_mirror_search_dns - Test searching dns patterns"""
         pmir = "phit"
         smir = "shit"
@@ -968,7 +974,7 @@ deb http://ubuntu.com/ubuntu/ xenial-proposed main""")
         mocksdns.assert_has_calls(calls)
 
         # first return is for the non-dns call before
-        with mock.patch.object(cc_apt_configure, 'search_for_mirror',
+        with mock.patch.object(cc_apt_configure.util, 'search_for_mirror',
                                side_effect=[None, pmir, None, smir]) as mockse:
             mirrors = cc_apt_configure.find_apt_mirror_info(cfg, mycloud, arch)
 
@@ -989,6 +995,17 @@ deb http://ubuntu.com/ubuntu/ xenial-proposed main""")
 
 
 class TestDebconfSelections(TestCase):
+
+    @mock.patch("cloudinit.config.cc_apt_configure.util.subp")
+    def test_set_sel_appends_newline_if_absent(self, m_subp):
+        """Automatically append a newline to debconf-set-selections config."""
+        selections = b'some/setting boolean true'
+        cc_apt_configure.debconf_set_selections(selections=selections)
+        cc_apt_configure.debconf_set_selections(selections=selections + b'\n')
+        m_call = mock.call(
+            ['debconf-set-selections'], data=selections + b'\n', capture=True,
+            target=None)
+        self.assertEqual([m_call, m_call], m_subp.call_args_list)
 
     @mock.patch("cloudinit.config.cc_apt_configure.debconf_set_selections")
     def test_no_set_sel_if_none_to_set(self, m_set_sel):

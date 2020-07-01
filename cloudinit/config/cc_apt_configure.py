@@ -127,7 +127,7 @@ to ``^[\\w-]+:\\w``
 
 Source list entries can be specified as a dictionary under the ``sources``
 config key, with key in the dict representing a different source file. The key
-The key of each source entry will be used as an id that can be referenced in
+of each source entry will be used as an id that can be referenced in
 other config entries, as well as the filename for the source's configuration
 under ``/etc/apt/sources.list.d``. If the name does not end with ``.list``,
 it will be appended. If there is no configuration for a key in ``sources``, no
@@ -253,7 +253,7 @@ def get_default_mirrors(arch=None, target=None):
        architecture, for more see:
        https://wiki.ubuntu.com/UbuntuDevelopment/PackageArchive#Ports"""
     if arch is None:
-        arch = util.get_architecture(target)
+        arch = util.get_dpkg_architecture(target)
     if arch in PRIMARY_ARCHES:
         return PRIMARY_ARCH_MIRRORS.copy()
     if arch in PORTS_ARCHES:
@@ -303,13 +303,13 @@ def apply_apt(cfg, cloud, target):
     LOG.debug("handling apt config: %s", cfg)
 
     release = util.lsb_release(target=target)['codename']
-    arch = util.get_architecture(target)
+    arch = util.get_dpkg_architecture(target)
     mirrors = find_apt_mirror_info(cfg, cloud, arch=arch)
     LOG.debug("Apt Mirror info: %s", mirrors)
 
     if util.is_false(cfg.get('preserve_sources_list', False)):
         generate_sources_list(cfg, release, mirrors, cloud)
-        rename_apt_lists(mirrors, target)
+        rename_apt_lists(mirrors, target, arch)
 
     try:
         apply_apt_config(cfg, APT_PROXY_FN, APT_CONFIG_FN)
@@ -332,6 +332,8 @@ def apply_apt(cfg, cloud, target):
 
 
 def debconf_set_selections(selections, target=None):
+    if not selections.endswith(b'\n'):
+        selections += b'\n'
     util.subp(['debconf-set-selections'], data=selections, target=target,
               capture=True)
 
@@ -374,7 +376,7 @@ def apply_debconf_selections(cfg, target=None):
 
     selections = '\n'.join(
         [selsets[key] for key in sorted(selsets.keys())])
-    debconf_set_selections(selections.encode() + b"\n", target=target)
+    debconf_set_selections(selections.encode(), target=target)
 
     # get a complete list of packages listed in input
     pkgs_cfgd = set()
@@ -425,9 +427,9 @@ def mirrorurl_to_apt_fileprefix(mirror):
     return string
 
 
-def rename_apt_lists(new_mirrors, target=None):
+def rename_apt_lists(new_mirrors, target, arch):
     """rename_apt_lists - rename apt lists to preserve old cache data"""
-    default_mirrors = get_default_mirrors(util.get_architecture(target))
+    default_mirrors = get_default_mirrors(arch)
 
     pre = util.target_path(target, APT_LISTS)
     for (name, omirror) in default_mirrors.items():
@@ -761,25 +763,6 @@ def convert_to_v3_apt_format(cfg):
     return cfg
 
 
-def search_for_mirror(candidates):
-    """
-    Search through a list of mirror urls for one that works
-    This needs to return quickly.
-    """
-    if candidates is None:
-        return None
-
-    LOG.debug("search for mirror in candidates: '%s'", candidates)
-    for cand in candidates:
-        try:
-            if util.is_resolvable_url(cand):
-                LOG.debug("found working mirror: '%s'", cand)
-                return cand
-        except Exception:
-            pass
-    return None
-
-
 def search_for_mirror_dns(configured, mirrortype, cfg, cloud):
     """
     Try to resolve a list of predefines DNS names to pick mirrors
@@ -811,7 +794,7 @@ def search_for_mirror_dns(configured, mirrortype, cfg, cloud):
         for post in doms:
             mirror_list.append(mirrorfmt % (post))
 
-        mirror = search_for_mirror(mirror_list)
+        mirror = util.search_for_mirror(mirror_list)
 
     return mirror
 
@@ -874,7 +857,7 @@ def get_mirror(cfg, mirrortype, arch, cloud):
     # fallback to search if specified
     if mirror is None:
         # list of mirrors to try to resolve
-        mirror = search_for_mirror(mcfg.get("search", None))
+        mirror = util.search_for_mirror(mcfg.get("search", None))
 
     # fallback to search_dns if specified
     if mirror is None:
@@ -894,7 +877,7 @@ def find_apt_mirror_info(cfg, cloud, arch=None):
     """
 
     if arch is None:
-        arch = util.get_architecture()
+        arch = util.get_dpkg_architecture()
         LOG.debug("got arch for mirror selection: %s", arch)
     pmirror = get_mirror(cfg, "primary", arch, cloud)
     LOG.debug("got primary mirror: %s", pmirror)

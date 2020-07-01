@@ -12,14 +12,13 @@ import copy
 import functools
 import os
 
-import six
-
 from cloudinit import ec2_utils
 from cloudinit import log as logging
 from cloudinit import net
 from cloudinit import sources
 from cloudinit import url_helper
 from cloudinit import util
+from cloudinit.sources import BrokenMetadata
 
 # See https://docs.openstack.org/user-guide/cli-config-drive.html
 
@@ -36,22 +35,40 @@ KEY_COPIES = (
     ('local-hostname', 'hostname', False),
     ('instance-id', 'uuid', True),
 )
+
+# Versions and names taken from nova source nova/api/metadata/base.py
 OS_LATEST = 'latest'
 OS_FOLSOM = '2012-08-10'
 OS_GRIZZLY = '2013-04-04'
 OS_HAVANA = '2013-10-17'
 OS_LIBERTY = '2015-10-15'
+# NEWTON_ONE adds 'devices' to md (sriov-pf-passthrough-neutron-port-vlan)
+OS_NEWTON_ONE = '2016-06-30'
+# NEWTON_TWO adds vendor_data2.json (vendordata-reboot)
+OS_NEWTON_TWO = '2016-10-06'
+# OS_OCATA adds 'vif' field to devices (sriov-pf-passthrough-neutron-port-vlan)
+OS_OCATA = '2017-02-22'
+# OS_ROCKY adds a vf_trusted field to devices (sriov-trusted-vfs)
+OS_ROCKY = '2018-08-27'
+
+
 # keep this in chronological order. new supported versions go at the end.
 OS_VERSIONS = (
     OS_FOLSOM,
     OS_GRIZZLY,
     OS_HAVANA,
     OS_LIBERTY,
+    OS_NEWTON_ONE,
+    OS_NEWTON_TWO,
+    OS_OCATA,
+    OS_ROCKY,
 )
 
-PHYSICAL_TYPES = (
+KNOWN_PHYSICAL_TYPES = (
     None,
+    'bgpovs',  # not present in OpenStack upstream but used on OVH cloud.
     'bridge',
+    'cascading',  # not present in OpenStack upstream, used on OpenTelekomCloud
     'dvs',
     'ethernet',
     'hw_veb',
@@ -65,10 +82,6 @@ PHYSICAL_TYPES = (
 
 
 class NonReadable(IOError):
-    pass
-
-
-class BrokenMetadata(IOError):
     pass
 
 
@@ -148,8 +161,7 @@ class SourceMixin(object):
             return device
 
 
-@six.add_metaclass(abc.ABCMeta)
-class BaseReader(object):
+class BaseReader(metaclass=abc.ABCMeta):
 
     def __init__(self, base_path):
         self.base_path = base_path
@@ -212,7 +224,7 @@ class BaseReader(object):
         """
 
         load_json_anytype = functools.partial(
-            util.load_json, root_types=(dict, list) + six.string_types)
+            util.load_json, root_types=(dict, list, str))
 
         def datafiles(version):
             files = {}
@@ -441,7 +453,7 @@ class MetadataReader(BaseReader):
             return self._versions
         found = []
         version_path = self._path_join(self.base_path, "openstack")
-        content = self._path_read(version_path)
+        content = self._path_read(version_path, decode=True)
         for line in content.splitlines():
             line = line.strip()
             if not line:
@@ -569,26 +581,34 @@ def convert_net_json(network_json=None, known_macs=None):
                         if n['link'] == link['id']]:
             subnet = dict((k, v) for k, v in network.items()
                           if k in valid_keys['subnet'])
-            if 'dhcp' in network['type']:
-                t = 'dhcp6' if network['type'].startswith('ipv6') else 'dhcp4'
-                subnet.update({
-                    'type': t,
-                })
-            else:
+
+            if network['type'] == 'ipv4_dhcp':
+                subnet.update({'type': 'dhcp4'})
+            elif network['type'] == 'ipv6_dhcp':
+                subnet.update({'type': 'dhcp6'})
+            elif network['type'] in ['ipv6_slaac', 'ipv6_dhcpv6-stateless',
+                                     'ipv6_dhcpv6-stateful']:
+                subnet.update({'type': network['type']})
+            elif network['type'] in ['ipv4', 'ipv6']:
                 subnet.update({
                     'type': 'static',
                     'address': network.get('ip_address'),
                 })
+
+            # Enable accept_ra for stateful and legacy ipv6_dhcp types
+            if network['type'] in ['ipv6_dhcpv6-stateful', 'ipv6_dhcp']:
+                cfg.update({'accept-ra': True})
+
             if network['type'] == 'ipv4':
                 subnet['ipv4'] = True
             if network['type'] == 'ipv6':
                 subnet['ipv6'] = True
             subnets.append(subnet)
         cfg.update({'subnets': subnets})
-        if link['type'] in PHYSICAL_TYPES:
-            cfg.update({'type': 'physical', 'mac_address': link_mac_addr})
-        elif link['type'] in ['bond']:
+        if link['type'] in ['bond']:
             params = {}
+            if link_mac_addr:
+                params['mac_address'] = link_mac_addr
             for k, v in link.items():
                 if k == 'bond_links':
                     continue
@@ -624,8 +644,10 @@ def convert_net_json(network_json=None, known_macs=None):
             curinfo.update({'mac': link['vlan_mac_address'],
                             'name': name})
         else:
-            raise ValueError(
-                'Unknown network_data link type: %s' % link['type'])
+            if link['type'] not in KNOWN_PHYSICAL_TYPES:
+                LOG.warning('Unknown network_data link type (%s); treating as'
+                            ' physical', link['type'])
+            cfg.update({'type': 'physical', 'mac_address': link_mac_addr})
 
         config.append(cfg)
         link_id_info[curinfo['id']] = curinfo
@@ -657,6 +679,17 @@ def convert_net_json(network_json=None, known_macs=None):
                 cfg[key] = [fmt % link_id_info[l]['name'] for l in target]
             else:
                 cfg[key] = fmt % link_id_info[target]['name']
+
+    # Infiniband interfaces may be referenced in network_data.json by a 6 byte
+    # Ethernet MAC-style address, and we use that address to look up the
+    # interface name above. Now ensure that the hardware address is set to the
+    # full 20 byte address.
+    ib_known_hwaddrs = net.get_ib_hwaddrs_by_interface()
+    if ib_known_hwaddrs:
+        for cfg in config:
+            if cfg['name'] in ib_known_hwaddrs:
+                cfg['mac_address'] = ib_known_hwaddrs[cfg['name']]
+                cfg['type'] = 'infiniband'
 
     for service in services:
         cfg = service

@@ -4,10 +4,10 @@ CloudStack
 ==========
 
 `Apache CloudStack`_ expose user-data, meta-data, user password and account
-sshkey thru the Virtual-Router. The datasource obtains the VR address via
+SSH key thru the Virtual-Router. The datasource obtains the VR address via
 dhcp lease information given to the instance.
 For more details on meta-data and user-data,
-refer the `CloudStack Administrator Guide`_. 
+refer the `CloudStack Administrator Guide`_.
 
 URLs to access user-data and meta-data from the Virtual Machine. Here 10.1.1.1
 is the Virtual Router IP:
@@ -37,11 +37,11 @@ An example configuration with the default values is provided below:
 .. sourcecode:: yaml
 
   datasource:
-   CloudStack:
-    max_wait: 120
-    timeout: 50
-    datasource_list:
-      - CloudStack
+    CloudStack:
+      max_wait: 120
+      timeout: 50
+      datasource_list:
+        - CloudStack
 
 
 .. _Apache CloudStack: http://cloudstack.apache.org/

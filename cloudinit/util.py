@@ -10,12 +10,12 @@
 
 import contextlib
 import copy as obj_copy
-import ctypes
 import email
 import glob
 import grp
 import gzip
 import hashlib
+import io
 import json
 import os
 import os.path
@@ -31,30 +31,22 @@ import string
 import subprocess
 import sys
 import time
-
-from errno import ENOENT, ENOEXEC
-
 from base64 import b64decode, b64encode
-from six.moves.urllib import parse as urlparse
-
-import six
-import yaml
+from errno import ENOENT, ENOEXEC
+from functools import lru_cache
+from urllib import parse
 
 from cloudinit import importer
 from cloudinit import log as logging
-from cloudinit import mergers
-from cloudinit import safeyaml
-from cloudinit import temp_utils
-from cloudinit import type_utils
-from cloudinit import url_helper
-from cloudinit import version
-
-from cloudinit.settings import (CFG_BUILTIN)
-
-try:
-    string_types = (basestring,)
-except NameError:
-    string_types = (str,)
+from cloudinit import (
+    mergers,
+    safeyaml,
+    temp_utils,
+    type_utils,
+    url_helper,
+    version,
+)
+from cloudinit.settings import CFG_BUILTIN
 
 _DNS_REDIRECT_IP = None
 LOG = logging.getLogger(__name__)
@@ -74,19 +66,21 @@ CONTAINER_TESTS = (['systemd-detect-virt', '--quiet', '--container'],
                    ['running-in-container'],
                    ['lxc-is-container'])
 
-PROC_CMDLINE = None
 
-_LSB_RELEASE = {}
-PY26 = sys.version_info[0:2] == (2, 6)
+@lru_cache()
+def get_dpkg_architecture(target=None):
+    """Return the sanitized string output by `dpkg --print-architecture`.
 
-
-def get_architecture(target=None):
+    N.B. This function is wrapped in functools.lru_cache, so repeated calls
+    won't shell out every time.
+    """
     out, _ = subp(['dpkg', '--print-architecture'], capture=True,
                   target=target)
     return out.strip()
 
 
-def _lsb_release(target=None):
+@lru_cache()
+def lsb_release(target=None):
     fmap = {'Codename': 'codename', 'Description': 'description',
             'Distributor ID': 'id', 'Release': 'release'}
 
@@ -109,23 +103,11 @@ def _lsb_release(target=None):
     return data
 
 
-def lsb_release(target=None):
-    if target_path(target) != "/":
-        # do not use or update cache if target is provided
-        return _lsb_release(target)
-
-    global _LSB_RELEASE
-    if not _LSB_RELEASE:
-        data = _lsb_release()
-        _LSB_RELEASE.update(data)
-    return _LSB_RELEASE
-
-
 def target_path(target, path=None):
     # return 'path' inside target, accepting target as None
     if target in (None, ""):
         target = "/"
-    elif not isinstance(target, string_types):
+    elif not isinstance(target, str):
         raise ValueError("Unexpected input for target: %s" % target)
     else:
         target = os.path.abspath(target)
@@ -145,14 +127,14 @@ def target_path(target, path=None):
 
 def decode_binary(blob, encoding='utf-8'):
     # Converts a binary type into a text type using given encoding.
-    if isinstance(blob, six.string_types):
+    if isinstance(blob, str):
         return blob
     return blob.decode(encoding)
 
 
 def encode_text(text, encoding='utf-8'):
     # Converts a text string into a binary type using given encoding.
-    if isinstance(text, six.binary_type):
+    if isinstance(text, bytes):
         return text
     return text.encode(encoding)
 
@@ -182,8 +164,7 @@ def fully_decoded_payload(part):
     # bytes, first try to decode to str via CT charset, and failing that, try
     # utf-8 using surrogate escapes.
     cte_payload = part.get_payload(decode=True)
-    if (six.PY3 and
-            part.get_content_maintype() == 'text' and
+    if (part.get_content_maintype() == 'text' and
             isinstance(cte_payload, bytes)):
         charset = part.get_charset()
         if charset and charset.input_codec:
@@ -247,7 +228,7 @@ class ProcessExecutionError(IOError):
         else:
             self.description = description
 
-        if not isinstance(exit_code, six.integer_types):
+        if not isinstance(exit_code, int):
             self.exit_code = self.empty_attr
         else:
             self.exit_code = exit_code
@@ -288,7 +269,7 @@ class ProcessExecutionError(IOError):
         """
         if data is bytes object, decode
         """
-        return text.decode() if isinstance(text, six.binary_type) else text
+        return text.decode() if isinstance(text, bytes) else text
 
     def _indent_text(self, text, indent_level=8):
         """
@@ -297,7 +278,7 @@ class ProcessExecutionError(IOError):
         cr = '\n'
         indent = ' ' * indent_level
         # if input is bytes, return bytes
-        if isinstance(text, six.binary_type):
+        if isinstance(text, bytes):
             cr = cr.encode()
             indent = indent.encode()
         # remove any newlines at end of text first to prevent unneeded blank
@@ -329,9 +310,6 @@ class SeLinuxGuard(object):
             return
 
         path = os.path.realpath(self.path)
-        # path should be a string, not unicode
-        if six.PY2:
-            path = str(path)
         try:
             stats = os.lstat(path)
             self.selinux.matchpathcon(path, stats[stat.ST_MODE])
@@ -376,7 +354,7 @@ def is_true(val, addons=None):
     check_set = TRUE_STRINGS
     if addons:
         check_set = list(check_set) + addons
-    if six.text_type(val).lower().strip() in check_set:
+    if str(val).lower().strip() in check_set:
         return True
     return False
 
@@ -387,7 +365,7 @@ def is_false(val, addons=None):
     check_set = FALSE_STRINGS
     if addons:
         check_set = list(check_set) + addons
-    if six.text_type(val).lower().strip() in check_set:
+    if str(val).lower().strip() in check_set:
         return True
     return False
 
@@ -404,9 +382,10 @@ def translate_bool(val, addons=None):
 
 
 def rand_str(strlen=32, select_from=None):
+    r = random.SystemRandom()
     if not select_from:
         select_from = string.ascii_letters + string.digits
-    return "".join([random.choice(select_from) for _x in range(0, strlen)])
+    return "".join([r.choice(select_from) for _x in range(0, strlen)])
 
 
 def rand_dict_key(dictionary, postfix=None):
@@ -447,7 +426,7 @@ def uniq_merge_sorted(*lists):
 def uniq_merge(*lists):
     combined_list = []
     for a_list in lists:
-        if isinstance(a_list, six.string_types):
+        if isinstance(a_list, str):
             a_list = a_list.strip().split(",")
             # Kickout the empty ones
             a_list = [a for a in a_list if len(a)]
@@ -470,7 +449,7 @@ def clean_filename(fn):
 
 def decomp_gzip(data, quiet=True, decode=True):
     try:
-        buf = six.BytesIO(encode_text(data))
+        buf = io.BytesIO(encode_text(data))
         with contextlib.closing(gzip.GzipFile(None, "rb", 1, buf)) as gh:
             # E1101 is https://github.com/PyCQA/pylint/issues/1444
             if decode:
@@ -481,7 +460,7 @@ def decomp_gzip(data, quiet=True, decode=True):
         if quiet:
             return data
         else:
-            raise DecompressionError(six.text_type(e))
+            raise DecompressionError(str(e))
 
 
 def extract_usergroup(ug_pair):
@@ -539,22 +518,24 @@ def multi_log(text, console=True, stderr=True,
             log.log(log_level, text)
 
 
-def is_ipv4(instr):
-    """determine if input string is a ipv4 address. return boolean."""
-    toks = instr.split('.')
-    if len(toks) != 4:
-        return False
-
-    try:
-        toks = [x for x in toks if 0 <= int(x) < 256]
-    except Exception:
-        return False
-
-    return len(toks) == 4
+@lru_cache()
+def is_BSD():
+    return 'BSD' in platform.system()
 
 
+@lru_cache()
 def is_FreeBSD():
     return system_info()['variant'] == "freebsd"
+
+
+@lru_cache()
+def is_NetBSD():
+    return system_info()['variant'] == "netbsd"
+
+
+@lru_cache()
+def is_OpenBSD():
+    return system_info()['variant'] == "openbsd"
 
 
 def get_cfg_option_bool(yobj, key, default=False):
@@ -567,7 +548,7 @@ def get_cfg_option_str(yobj, key, default=None):
     if key not in yobj:
         return default
     val = yobj[key]
-    if not isinstance(val, six.string_types):
+    if not isinstance(val, str):
         val = str(val)
     return val
 
@@ -576,24 +557,68 @@ def get_cfg_option_int(yobj, key, default=0):
     return int(get_cfg_option_str(yobj, key, default=default))
 
 
+def _parse_redhat_release(release_file=None):
+    """Return a dictionary of distro info fields from /etc/redhat-release.
+
+    Dict keys will align with /etc/os-release keys:
+        ID, VERSION_ID, VERSION_CODENAME
+    """
+
+    if not release_file:
+        release_file = '/etc/redhat-release'
+    if not os.path.exists(release_file):
+        return {}
+    redhat_release = load_file(release_file)
+    redhat_regex = (
+        r'(?P<name>.+) release (?P<version>[\d\.]+) '
+        r'\((?P<codename>[^)]+)\)')
+    match = re.match(redhat_regex, redhat_release)
+    if match:
+        group = match.groupdict()
+        group['name'] = group['name'].lower().partition(' linux')[0]
+        if group['name'] == 'red hat enterprise':
+            group['name'] = 'redhat'
+        return {'ID': group['name'], 'VERSION_ID': group['version'],
+                'VERSION_CODENAME': group['codename']}
+    return {}
+
+
+@lru_cache()
 def get_linux_distro():
     distro_name = ''
     distro_version = ''
+    flavor = ''
+    os_release = {}
     if os.path.exists('/etc/os-release'):
-        os_release = load_file('/etc/os-release')
-        for line in os_release.splitlines():
-            if line.strip().startswith('ID='):
-                distro_name = line.split('=')[-1]
-                distro_name = distro_name.replace('"', '')
-            if line.strip().startswith('VERSION_ID='):
-                # Lets hope for the best that distros stay consistent ;)
-                distro_version = line.split('=')[-1]
-                distro_version = distro_version.replace('"', '')
+        os_release = load_shell_content(load_file('/etc/os-release'))
+    if not os_release:
+        os_release = _parse_redhat_release()
+    if os_release:
+        distro_name = os_release.get('ID', '')
+        distro_version = os_release.get('VERSION_ID', '')
+        if 'sles' in distro_name or 'suse' in distro_name:
+            # RELEASE_BLOCKER: We will drop this sles divergent behavior in
+            # the future so that get_linux_distro returns a named tuple
+            # which will include both version codename and architecture
+            # on all distributions.
+            flavor = platform.machine()
+        else:
+            flavor = os_release.get('VERSION_CODENAME', '')
+            if not flavor:
+                match = re.match(r'[^ ]+ \((?P<codename>[^)]+)\)',
+                                 os_release.get('VERSION', ''))
+                if match:
+                    flavor = match.groupdict()['codename']
+        if distro_name == 'rhel':
+            distro_name = 'redhat'
+    elif is_BSD():
+        distro_name = platform.system().lower()
+        distro_version = platform.release()
     else:
         dist = ('', '', '')
         try:
-            # Will be removed in 3.7
-            dist = platform.dist()  # pylint: disable=W1505
+            # Was removed in 3.8
+            dist = platform.dist()  # pylint: disable=W1505,E1101
         except Exception:
             pass
         finally:
@@ -606,33 +631,36 @@ def get_linux_distro():
                             'expansion may have unexpected results')
         return dist
 
-    return (distro_name, distro_version, platform.machine())
+    return (distro_name, distro_version, flavor)
 
 
+@lru_cache()
 def system_info():
     info = {
         'platform': platform.platform(),
         'system': platform.system(),
         'release': platform.release(),
         'python': platform.python_version(),
-        'uname': platform.uname(),
+        'uname': list(platform.uname()),
         'dist': get_linux_distro()
     }
     system = info['system'].lower()
     var = 'unknown'
     if system == "linux":
         linux_dist = info['dist'][0].lower()
-        if linux_dist in ('centos', 'debian', 'fedora', 'rhel', 'suse'):
+        if linux_dist in (
+                'arch', 'centos', 'debian', 'fedora', 'rhel', 'suse'):
             var = linux_dist
         elif linux_dist in ('ubuntu', 'linuxmint', 'mint'):
             var = 'ubuntu'
         elif linux_dist == 'redhat':
             var = 'rhel'
-        elif linux_dist in ('opensuse', 'sles'):
+        elif linux_dist in (
+                'opensuse', 'opensuse-tumbleweed', 'opensuse-leap', 'sles'):
             var = 'suse'
         else:
             var = 'linux'
-    elif system in ('windows', 'darwin', "freebsd"):
+    elif system in ('windows', 'darwin', "freebsd", "netbsd", "openbsd"):
         var = system
 
     info['variant'] = var
@@ -660,7 +688,7 @@ def get_cfg_option_list(yobj, key, default=None):
     if isinstance(val, (list)):
         cval = [v for v in val]
         return cval
-    if not isinstance(val, six.string_types):
+    if not isinstance(val, str):
         val = str(val)
     return [val]
 
@@ -668,6 +696,21 @@ def get_cfg_option_list(yobj, key, default=None):
 # get a cfg entry by its path array
 # for f['a']['b']: get_cfg_by_path(mycfg,('a','b'))
 def get_cfg_by_path(yobj, keyp, default=None):
+    """Return the value of the item at path C{keyp} in C{yobj}.
+
+    example:
+      get_cfg_by_path({'a': {'b': {'num': 4}}}, 'a/b/num') == 4
+      get_cfg_by_path({'a': {'b': {'num': 4}}}, 'c/d') == None
+
+    @param yobj: A dictionary.
+    @param keyp: A path inside yobj.  it can be a '/' delimited string,
+                 or an iterable.
+    @param default: The default to return if the path does not exist.
+    @return: The value of the item at keyp."
+        is not found."""
+
+    if isinstance(keyp, str):
+        keyp = keyp.split("/")
     cur = yobj
     for tok in keyp:
         if tok not in cur:
@@ -764,7 +807,7 @@ def make_url(scheme, host, port=None,
     pieces.append(query or '')
     pieces.append(fragment or '')
 
-    return urlparse.urlunparse(pieces)
+    return parse.urlunparse(pieces)
 
 
 def mergemanydict(srcs, reverse=False):
@@ -907,7 +950,7 @@ def load_yaml(blob, default=None, allowed=(dict,)):
                              " but got %s instead") %
                             (allowed, type_utils.obj_name(converted)))
         loaded = converted
-    except (yaml.YAMLError, TypeError, ValueError) as e:
+    except (safeyaml.YAMLError, TypeError, ValueError) as e:
         msg = 'Failed loading yaml blob'
         mark = None
         if hasattr(e, 'context_mark') and getattr(e, 'context_mark'):
@@ -925,13 +968,6 @@ def load_yaml(blob, default=None, allowed=(dict,)):
 
 
 def read_seeded(base="", ext="", timeout=5, retries=10, file_retries=0):
-    if base.startswith("/"):
-        base = "file://%s" % base
-
-    # default retries for file is 0. for network is 10
-    if base.startswith("file://"):
-        retries = file_retries
-
     if base.find("%s") >= 0:
         ud_url = base % ("user-data" + ext)
         md_url = base % ("meta-data" + ext)
@@ -939,14 +975,14 @@ def read_seeded(base="", ext="", timeout=5, retries=10, file_retries=0):
         ud_url = "%s%s%s" % (base, "user-data", ext)
         md_url = "%s%s%s" % (base, "meta-data", ext)
 
-    md_resp = url_helper.read_file_or_url(md_url, timeout, retries,
-                                          file_retries)
+    md_resp = url_helper.read_file_or_url(md_url, timeout=timeout,
+                                          retries=retries)
     md = None
     if md_resp.ok():
         md = load_yaml(decode_binary(md_resp.contents), default={})
 
-    ud_resp = url_helper.read_file_or_url(ud_url, timeout, retries,
-                                          file_retries)
+    ud_resp = url_helper.read_file_or_url(ud_url, timeout=timeout,
+                                          retries=retries)
     ud = None
     if ud_resp.ok():
         ud = ud_resp.contents
@@ -980,7 +1016,7 @@ def read_conf_with_confd(cfgfile):
     if "conf_d" in cfg:
         confd = cfg['conf_d']
         if confd:
-            if not isinstance(confd, six.string_types):
+            if not isinstance(confd, str):
                 raise TypeError(("Config file %s contains 'conf_d' "
                                  "with non-string type %s") %
                                 (cfgfile, type_utils.obj_name(confd)))
@@ -998,7 +1034,7 @@ def read_conf_with_confd(cfgfile):
 
 
 def read_conf_from_cmdline(cmdline=None):
-    # return a dictionary or config on the cmdline or None
+    # return a dictionary of config on the cmdline or None
     return load_yaml(read_cc_from_cmdline(cmdline=cmdline))
 
 
@@ -1006,11 +1042,12 @@ def read_cc_from_cmdline(cmdline=None):
     # this should support reading cloud-config information from
     # the kernel command line.  It is intended to support content of the
     # format:
-    #  cc: <yaml content here> [end_cc]
+    #  cc: <yaml content here|urlencoded yaml content> [end_cc]
     # this would include:
     # cc: ssh_import_id: [smoser, kirkland]\\n
     # cc: ssh_import_id: [smoser, bob]\\nruncmd: [ [ ls, -l ], echo hi ] end_cc
     # cc:ssh_import_id: [smoser] end_cc cc:runcmd: [ [ ls, -l ] ] end_cc
+    # cc:ssh_import_id: %5Bsmoser%5D end_cc
     if cmdline is None:
         cmdline = get_cmdline()
 
@@ -1025,9 +1062,9 @@ def read_cc_from_cmdline(cmdline=None):
         end = cmdline.find(tag_end, begin + begin_l)
         if end < 0:
             end = clen
-        tokens.append(cmdline[begin + begin_l:end].lstrip().replace("\\n",
-                                                                    "\n"))
-
+        tokens.append(
+            parse.unquote(
+                cmdline[begin + begin_l:end].lstrip()).replace("\\n", "\n"))
         begin = cmdline.find(tag_begin, end + end_l)
 
     return '\n'.join(tokens)
@@ -1172,7 +1209,7 @@ def is_resolvable_url(url):
     """determine if this url is resolvable (existing or ip)."""
     return log_time(logfunc=LOG.debug, msg="Resolving URL: " + url,
                     func=is_resolvable,
-                    args=(urlparse.urlparse(url).hostname,))
+                    args=(parse.urlparse(url).hostname,))
 
 
 def search_for_mirror(candidates):
@@ -1180,9 +1217,14 @@ def search_for_mirror(candidates):
     Search through a list of mirror urls for one that works
     This needs to return quickly.
     """
+    if candidates is None:
+        return None
+
+    LOG.debug("search for mirror in candidates: '%s'", candidates)
     for cand in candidates:
         try:
             if is_resolvable_url(cand):
+                LOG.debug("found working mirror: '%s'", cand)
                 return cand
         except Exception:
             pass
@@ -1203,6 +1245,67 @@ def close_stdin():
         os.dup2(fp.fileno(), sys.stdin.fileno())
 
 
+def find_devs_with_freebsd(criteria=None, oformat='device',
+                           tag=None, no_cache=False, path=None):
+    if not criteria:
+        return glob.glob("/dev/msdosfs/*") + glob.glob("/dev/iso9660/*")
+    if criteria.startswith("LABEL="):
+        label = criteria.lstrip("LABEL=")
+        devlist = [
+            p for p in ['/dev/msdosfs/' + label, '/dev/iso9660/' + label]
+            if os.path.exists(p)]
+    elif criteria == "TYPE=vfat":
+        devlist = glob.glob("/dev/msdosfs/*")
+    elif criteria == "TYPE=iso9660":
+        devlist = glob.glob("/dev/iso9660/*")
+    return devlist
+
+
+def find_devs_with_netbsd(criteria=None, oformat='device',
+                          tag=None, no_cache=False, path=None):
+    devlist = []
+    label = None
+    _type = None
+    if criteria:
+        if criteria.startswith("LABEL="):
+            label = criteria.lstrip("LABEL=")
+        if criteria.startswith("TYPE="):
+            _type = criteria.lstrip("TYPE=")
+    out, _err = subp(['sysctl', '-n', 'hw.disknames'], rcs=[0])
+    for dev in out.split():
+        if label or _type:
+            mscdlabel_out, _ = subp(['mscdlabel', dev], rcs=[0, 1])
+        if label and not ('label "%s"' % label) in mscdlabel_out:
+            continue
+        if _type == "iso9660" and "ISO filesystem" not in mscdlabel_out:
+            continue
+        if _type == "vfat" and "ISO filesystem" in mscdlabel_out:
+            continue
+        devlist.append('/dev/' + dev)
+    return devlist
+
+
+def find_devs_with_openbsd(criteria=None, oformat='device',
+                           tag=None, no_cache=False, path=None):
+    out, _err = subp(['sysctl', '-n', 'hw.disknames'], rcs=[0])
+    devlist = []
+    for entry in out.split(','):
+        if not entry.endswith(':'):
+            # ffs partition with a serial, not a config-drive
+            continue
+        if entry == 'fd0:':
+            continue
+        part_id = 'a' if entry.startswith('cd') else 'i'
+        devlist.append(entry[:-1] + part_id)
+    if criteria == "TYPE=iso9660":
+        devlist = [i for i in devlist if i.startswith('cd')]
+    elif criteria in ["LABEL=CONFIG-2", "TYPE=vfat"]:
+        devlist = [i for i in devlist if not i.startswith('cd')]
+    elif criteria:
+        LOG.debug("Unexpected criteria: %s", criteria)
+    return ['/dev/' + i for i in devlist]
+
+
 def find_devs_with(criteria=None, oformat='device',
                    tag=None, no_cache=False, path=None):
     """
@@ -1212,6 +1315,16 @@ def find_devs_with(criteria=None, oformat='device',
       LABEL=<label>
       UUID=<uuid>
     """
+    if is_FreeBSD():
+        return find_devs_with_freebsd(criteria, oformat,
+                                      tag, no_cache, path)
+    elif is_NetBSD():
+        return find_devs_with_netbsd(criteria, oformat,
+                                     tag, no_cache, path)
+    elif is_OpenBSD():
+        return find_devs_with_openbsd(criteria, oformat,
+                                      tag, no_cache, path)
+
     blk_id_cmd = ['blkid']
     options = []
     if criteria:
@@ -1304,7 +1417,7 @@ def uniq_list(in_list):
 
 def load_file(fname, read_cb=None, quiet=False, decode=True):
     LOG.debug("Reading from %s (quiet=%s)", fname, quiet)
-    ofh = six.BytesIO()
+    ofh = io.BytesIO()
     try:
         with open(fname, 'rb') as ifh:
             pipe_in_out(ifh, ofh, chunk_cb=read_cb)
@@ -1321,14 +1434,8 @@ def load_file(fname, read_cb=None, quiet=False, decode=True):
         return contents
 
 
-def get_cmdline():
-    if 'DEBUG_PROC_CMDLINE' in os.environ:
-        return os.environ["DEBUG_PROC_CMDLINE"]
-
-    global PROC_CMDLINE
-    if PROC_CMDLINE is not None:
-        return PROC_CMDLINE
-
+@lru_cache()
+def _get_cmdline():
     if is_container():
         try:
             contents = load_file("/proc/1/cmdline")
@@ -1343,8 +1450,14 @@ def get_cmdline():
         except Exception:
             cmdline = ""
 
-    PROC_CMDLINE = cmdline
     return cmdline
+
+
+def get_cmdline():
+    if 'DEBUG_PROC_CMDLINE' in os.environ:
+        return os.environ["DEBUG_PROC_CMDLINE"]
+
+    return _get_cmdline()
 
 
 def pipe_in_out(in_fh, out_fh, chunk_size=1024, chunk_cb=None):
@@ -1549,20 +1662,33 @@ def json_serialize_default(_obj):
         return 'Warning: redacted unserializable type {0}'.format(type(_obj))
 
 
+def json_preserialize_binary(data):
+    """Preserialize any discovered binary values to avoid json.dumps issues.
+
+    Used only on python 2.7 where default type handling is not honored for
+    failure to encode binary data. LP: #1801364.
+    TODO(Drop this function when py2.7 support is dropped from cloud-init)
+    """
+    data = obj_copy.deepcopy(data)
+    for key, value in data.items():
+        if isinstance(value, (dict)):
+            data[key] = json_preserialize_binary(value)
+        if isinstance(value, bytes):
+            data[key] = 'ci-b64:{0}'.format(b64e(value))
+    return data
+
+
 def json_dumps(data):
     """Return data in nicely formatted json."""
-    return json.dumps(data, indent=1, sort_keys=True,
-                      separators=(',', ': '), default=json_serialize_default)
-
-
-def yaml_dumps(obj, explicit_start=True, explicit_end=True):
-    """Return data in nicely formatted yaml."""
-    return yaml.safe_dump(obj,
-                          line_break="\n",
-                          indent=4,
-                          explicit_start=explicit_start,
-                          explicit_end=explicit_end,
-                          default_flow_style=False)
+    try:
+        return json.dumps(
+            data, indent=1, sort_keys=True, separators=(',', ': '),
+            default=json_serialize_default)
+    except UnicodeDecodeError:
+        if sys.version_info[:2] == (2, 7):
+            data = json_preserialize_binary(data)
+            return json.dumps(data)
+        raise
 
 
 def ensure_dir(path, mode=None):
@@ -1626,7 +1752,7 @@ def mounts():
     return mounted
 
 
-def mount_cb(device, callback, data=None, rw=False, mtype=None, sync=True,
+def mount_cb(device, callback, data=None, mtype=None,
              update_env_for_mount=None):
     """
     Mount the device, call method 'callback' passing the directory
@@ -1673,18 +1799,7 @@ def mount_cb(device, callback, data=None, rw=False, mtype=None, sync=True,
             for mtype in mtypes:
                 mountpoint = None
                 try:
-                    mountcmd = ['mount']
-                    mountopts = []
-                    if rw:
-                        mountopts.append('rw')
-                    else:
-                        mountopts.append('ro')
-                    if sync:
-                        # This seems like the safe approach to do
-                        # (ie where this is on by default)
-                        mountopts.append("sync")
-                    if mountopts:
-                        mountcmd.extend(["-o", ",".join(mountopts)])
+                    mountcmd = ['mount', '-o', 'ro']
                     if mtype:
                         mountcmd.extend(['-t', mtype])
                     mountcmd.append(device)
@@ -1751,6 +1866,33 @@ def time_rfc2822():
     return ts
 
 
+def boottime():
+    """Use sysctlbyname(3) via ctypes to find kern.boottime
+
+    kern.boottime is of type struct timeval. Here we create a
+    private class to easier unpack it.
+
+    @return boottime: float to be compatible with linux
+    """
+    import ctypes
+
+    NULL_BYTES = b"\x00"
+
+    class timeval(ctypes.Structure):
+        _fields_ = [
+            ("tv_sec", ctypes.c_int64),
+            ("tv_usec", ctypes.c_int64)
+        ]
+    libc = ctypes.CDLL('libc.so')
+    size = ctypes.c_size_t()
+    size.value = ctypes.sizeof(timeval)
+    buf = timeval()
+    if libc.sysctlbyname(b"kern.boottime" + NULL_BYTES, ctypes.byref(buf),
+                         ctypes.byref(size), None, 0) != -1:
+        return buf.tv_sec + buf.tv_usec / 1000000.0
+    raise RuntimeError("Unable to retrieve kern.boottime on this system")
+
+
 def uptime():
     uptime_str = '??'
     method = 'unknown'
@@ -1762,15 +1904,8 @@ def uptime():
                 uptime_str = contents.split()[0]
         else:
             method = 'ctypes'
-            libc = ctypes.CDLL('/lib/libc.so.7')
-            size = ctypes.c_size_t()
-            buf = ctypes.c_int()
-            size.value = ctypes.sizeof(buf)
-            libc.sysctlbyname("kern.boottime", ctypes.byref(buf),
-                              ctypes.byref(size), None, 0)
-            now = time.time()
-            bootup = buf.value
-            uptime_str = now - bootup
+            # This is the *BSD codepath
+            uptime_str = str(time.time() - boottime())
 
     except Exception:
         logexc(LOG, "Unable to read uptime using method: %s" % method)
@@ -1978,13 +2113,13 @@ def subp(args, data=None, rcs=None, env=None, capture=True,
     # Popen converts entries in the arguments array from non-bytes to bytes.
     # When locale is unset it may use ascii for that encoding which can
     # cause UnicodeDecodeErrors. (LP: #1751051)
-    if isinstance(args, six.binary_type):
+    if isinstance(args, bytes):
         bytes_args = args
-    elif isinstance(args, six.string_types):
+    elif isinstance(args, str):
         bytes_args = args.encode("utf-8")
     else:
         bytes_args = [
-            x if isinstance(x, six.binary_type) else x.encode("utf-8")
+            x if isinstance(x, bytes) else x.encode("utf-8")
             for x in args]
     try:
         sp = subprocess.Popen(bytes_args, stdout=stdout,
@@ -2063,10 +2198,10 @@ def shellify(cmdlist, add_header=True):
         if isinstance(args, (list, tuple)):
             fixed = []
             for f in args:
-                fixed.append("'%s'" % (six.text_type(f).replace("'", escaped)))
+                fixed.append("'%s'" % (str(f).replace("'", escaped)))
             content = "%s%s\n" % (content, ' '.join(fixed))
             cmds_made += 1
-        elif isinstance(args, six.string_types):
+        elif isinstance(args, str):
             content = "%s%s\n" % (content, args)
             cmds_made += 1
         else:
@@ -2131,6 +2266,11 @@ def is_container():
     return False
 
 
+def is_lxd():
+    """Check to see if we are running in a lxd container."""
+    return os.path.exists('/dev/lxd/sock')
+
+
 def get_proc_env(pid, encoding='utf-8', errors='replace'):
     """
     Return the environment in a dict that a given process id was started with.
@@ -2187,7 +2327,7 @@ def expand_package_list(version_fmt, pkgs):
 
     pkglist = []
     for pkg in pkgs:
-        if isinstance(pkg, six.string_types):
+        if isinstance(pkg, str):
             pkglist.append(pkg)
             continue
 
@@ -2290,17 +2430,21 @@ def parse_mtab(path):
     return None
 
 
-def find_freebsd_part(label_part):
-    if label_part.startswith("/dev/label/"):
-        target_label = label_part[5:]
-        (label_part, _err) = subp(['glabel', 'status', '-s'])
-        for labels in label_part.split("\n"):
+def find_freebsd_part(fs):
+    splitted = fs.split('/')
+    if len(splitted) == 3:
+        return splitted[2]
+    elif splitted[2] in ['label', 'gpt', 'ufs']:
+        target_label = fs[5:]
+        (part, _err) = subp(['glabel', 'status', '-s'])
+        for labels in part.split("\n"):
             items = labels.split()
-            if len(items) > 0 and items[0].startswith(target_label):
-                label_part = items[2]
+            if len(items) > 0 and items[0] == target_label:
+                part = items[2]
                 break
-        label_part = str(label_part)
-    return label_part
+        return str(part)
+    else:
+        LOG.warning("Unexpected input in find_freebsd_part: %s", fs)
 
 
 def get_path_dev_freebsd(path, mnt_list):
@@ -2619,8 +2763,8 @@ def _call_dmidecode(key, dmidecode_path):
     try:
         cmd = [dmidecode_path, "--string", key]
         (result, _err) = subp(cmd)
-        LOG.debug("dmidecode returned '%s' for '%s'", result, key)
         result = result.strip()
+        LOG.debug("dmidecode returned '%s' for '%s'", result, key)
         if result.replace(".", "") == "":
             return ""
         return result
@@ -2683,7 +2827,7 @@ def read_dmi_data(key):
 
 def message_from_string(string):
     if sys.version_info[:2] < (2, 7):
-        return email.message_from_file(six.StringIO(string))
+        return email.message_from_file(io.StringIO(string))
     return email.message_from_string(string)
 
 
@@ -2771,9 +2915,6 @@ def load_shell_content(content, add_empty=False, empty_val=None):
        variables.  Set their value to empty_val."""
 
     def _shlex_split(blob):
-        if PY26 and isinstance(blob, six.text_type):
-            # Older versions don't support unicode input
-            blob = blob.encode("utf8")
         return shlex.split(blob, comments=True)
 
     data = {}
@@ -2829,5 +2970,21 @@ def udevadm_settle(exists=None, timeout=None):
 
     return subp(settle_cmd)
 
+
+def get_proc_ppid(pid):
+    """
+    Return the parent pid of a process.
+    """
+    ppid = 0
+    try:
+        contents = load_file("/proc/%s/stat" % pid, quiet=True)
+    except IOError as e:
+        LOG.warning('Failed to load /proc/%s/stat. %s', pid, e)
+    if contents:
+        parts = contents.split(" ", 4)
+        # man proc says
+        #  ppid %d     (4) The PID of the parent.
+        ppid = int(parts[3])
+    return ppid
 
 # vi: ts=4 expandtab

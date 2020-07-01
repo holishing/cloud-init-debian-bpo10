@@ -163,7 +163,7 @@ def handle(_name, cfg, cloud, log, _args):
 def update_disk_setup_devices(disk_setup, tformer):
     # update 'disk_setup' dictionary anywhere were a device may occur
     # update it with the response from 'tformer'
-    for origname in disk_setup.keys():
+    for origname in list(disk_setup):
         transformed = tformer(origname)
         if transformed is None or transformed == origname:
             continue
@@ -743,7 +743,7 @@ def assert_and_settle_device(device):
         util.udevadm_settle()
         if not os.path.exists(device):
             raise RuntimeError("Device %s did not exist and was not created "
-                               "with a udevamd settle." % device)
+                               "with a udevadm settle." % device)
 
     # Whether or not the device existed above, it is possible that udev
     # events that would populate udev database (for reading by lsdname) have
@@ -825,6 +825,7 @@ def lookup_force_flag(fs):
         'btrfs': '-f',
         'xfs': '-f',
         'reiserfs': '-f',
+        'swap': '-f',
     }
 
     if 'ext' in fs.lower():
@@ -982,7 +983,9 @@ def mkfs(fs_cfg):
 
         # File systems that support the -F flag
         if overwrite or device_type(device) == "disk":
-            fs_cmd.append(lookup_force_flag(fs_type))
+            force_flag = lookup_force_flag(fs_type)
+            if force_flag:
+                fs_cmd.append(force_flag)
 
         # Add the extends FS options
         if fs_opts:

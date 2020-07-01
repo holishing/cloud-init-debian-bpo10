@@ -2,7 +2,7 @@
 
 from collections import namedtuple
 import os
-from six import StringIO
+from io import StringIO
 from textwrap import dedent
 
 from cloudinit.atomic_helper import write_json
@@ -39,7 +39,8 @@ class TestStatus(CiTestCase):
         ensure_file(self.disable_file)  # Create the ignored disable file
         (is_disabled, reason) = wrap_and_call(
             'cloudinit.cmd.status',
-            {'uses_systemd': False},
+            {'uses_systemd': False,
+             'get_cmdline': "root=/dev/my-root not-important"},
             status._is_cloudinit_disabled, self.disable_file, self.paths)
         self.assertFalse(
             is_disabled, 'expected enabled cloud-init on sysvinit')
@@ -50,7 +51,8 @@ class TestStatus(CiTestCase):
         ensure_file(self.disable_file)  # Create observed disable file
         (is_disabled, reason) = wrap_and_call(
             'cloudinit.cmd.status',
-            {'uses_systemd': True},
+            {'uses_systemd': True,
+             'get_cmdline': "root=/dev/my-root not-important"},
             status._is_cloudinit_disabled, self.disable_file, self.paths)
         self.assertTrue(is_disabled, 'expected disabled cloud-init')
         self.assertEqual(
@@ -380,7 +382,6 @@ class TestStatus(CiTestCase):
                 wrap_and_call(
                     'cloudinit.cmd.status',
                     {'sys.argv': {'new': ['status']},
-                     'sys.exit': {'side_effect': self.sys_exit},
                      '_is_cloudinit_disabled': (False, ''),
                      'Init': {'side_effect': self.init_class}},
                     status.main)

@@ -15,6 +15,7 @@ import os
 import shutil
 import sys
 import tempfile
+import platform
 
 import setuptools
 from setuptools.command.install import install
@@ -30,23 +31,8 @@ VARIANT = None
 def is_f(p):
     return os.path.isfile(p)
 
-
-def tiny_p(cmd, capture=True):
-    # Darn python 2.6 doesn't have check_output (argggg)
-    stdout = subprocess.PIPE
-    stderr = subprocess.PIPE
-    if not capture:
-        stdout = None
-        stderr = None
-    sp = subprocess.Popen(cmd, stdout=stdout,
-                          stderr=stderr, stdin=None,
-                          universal_newlines=True)
-    (out, err) = sp.communicate()
-    ret = sp.returncode
-    if ret not in [0]:
-        raise RuntimeError("Failed running %s [rc=%s] (%s, %s)" %
-                           (cmd, ret, out, err))
-    return (out, err)
+def is_generator(p):
+    return '-generator' in p
 
 
 def pkg_config_read(library, var):
@@ -58,7 +44,7 @@ def pkg_config_read(library, var):
     }
     cmd = ['pkg-config', '--variable=%s' % var, library]
     try:
-        (path, err) = tiny_p(cmd)
+        path = subprocess.check_output(cmd).decode('utf-8')
         path = path.strip()
     except Exception:
         path = fallbacks[library][var]
@@ -80,17 +66,17 @@ def in_virtualenv():
 
 def get_version():
     cmd = [sys.executable, 'tools/read-version']
-    (ver, _e) = tiny_p(cmd)
-    return str(ver).strip()
+    ver = subprocess.check_output(cmd)
+    return ver.decode('utf-8').strip()
 
 
 def read_requires():
     cmd = [sys.executable, 'tools/read-dependencies']
-    (deps, _e) = tiny_p(cmd)
-    return str(deps).splitlines()
+    deps = subprocess.check_output(cmd)
+    return deps.decode('utf-8').splitlines()
 
 
-def render_tmpl(template):
+def render_tmpl(template, mode=None):
     """render template into a tmpdir under same dir as setup.py
 
     This is rendered to a temporary directory under the top level
@@ -115,10 +101,13 @@ def render_tmpl(template):
     bname = os.path.basename(template).rstrip(tmpl_ext)
     fpath = os.path.join(tmpd, bname)
     if VARIANT:
-        tiny_p([sys.executable, './tools/render-cloudcfg', '--variant',
-            VARIANT, template, fpath])
+        subprocess.run([sys.executable, './tools/render-cloudcfg', '--variant',
+                        VARIANT, template, fpath])
     else:
-        tiny_p([sys.executable, './tools/render-cloudcfg', template, fpath])
+        subprocess.run(
+            [sys.executable, './tools/render-cloudcfg', template, fpath])
+    if mode:
+        os.chmod(fpath, mode)
     # return path relative to setup.py
     return os.path.join(os.path.basename(tmpd), bname)
 
@@ -132,19 +121,24 @@ if '--distro' in sys.argv:
 INITSYS_FILES = {
     'sysvinit': [f for f in glob('sysvinit/redhat/*') if is_f(f)],
     'sysvinit_freebsd': [f for f in glob('sysvinit/freebsd/*') if is_f(f)],
+    'sysvinit_netbsd': [f for f in glob('sysvinit/netbsd/*') if is_f(f)],
     'sysvinit_deb': [f for f in glob('sysvinit/debian/*') if is_f(f)],
     'sysvinit_openrc': [f for f in glob('sysvinit/gentoo/*') if is_f(f)],
     'sysvinit_suse': [f for f in glob('sysvinit/suse/*') if is_f(f)],
     'systemd': [render_tmpl(f)
                 for f in (glob('systemd/*.tmpl') +
                           glob('systemd/*.service') +
-                          glob('systemd/*.target')) if is_f(f)],
-    'systemd.generators': [f for f in glob('systemd/*-generator') if is_f(f)],
+                          glob('systemd/*.target'))
+                if (is_f(f) and not is_generator(f))],
+    'systemd.generators': [
+        render_tmpl(f, mode=0o755)
+        for f in glob('systemd/*') if is_f(f) and is_generator(f)],
     'upstart': [f for f in glob('upstart/*') if is_f(f)],
 }
 INITSYS_ROOTS = {
     'sysvinit': 'etc/rc.d/init.d',
     'sysvinit_freebsd': 'usr/local/etc/rc.d',
+    'sysvinit_netbsd': 'usr/local/etc/rc.d',
     'sysvinit_deb': 'etc/init.d',
     'sysvinit_openrc': 'etc/init.d',
     'sysvinit_suse': 'etc/init.d',
@@ -167,6 +161,19 @@ if os.uname()[0] == 'FreeBSD':
     USR_LIB_EXEC = "usr/local/lib"
 elif os.path.isfile('/etc/redhat-release'):
     USR_LIB_EXEC = "usr/libexec"
+elif os.path.isfile('/etc/system-release-cpe'):
+    with open('/etc/system-release-cpe') as f:
+        cpe_data = f.read().rstrip().split(':')
+
+        if cpe_data[1] == "\o":
+            # URI formated CPE
+            inc = 0
+        else:
+            # String formated CPE
+            inc = 1
+        (cpe_vendor, cpe_product, cpe_version) = cpe_data[2+inc:5+inc]
+        if cpe_vendor == "amazon":
+            USR_LIB_EXEC = "usr/libexec"
 
 
 class MyEggInfo(egg_info):
@@ -208,7 +215,7 @@ class InitsysInstallData(install):
         if self.init_system and isinstance(self.init_system, str):
             self.init_system = self.init_system.split(",")
 
-        if len(self.init_system) == 0:
+        if len(self.init_system) == 0 and not platform.system().endswith('BSD'):
             self.init_system = ['systemd']
 
         bad = [f for f in self.init_system if f not in INITSYS_TYPES]
@@ -238,20 +245,21 @@ if not in_virtualenv():
         INITSYS_ROOTS[k] = "/" + INITSYS_ROOTS[k]
 
 data_files = [
-    (ETC + '/bash_completion.d', ['bash_completion/cloud-init']),
     (ETC + '/cloud', [render_tmpl("config/cloud.cfg.tmpl")]),
     (ETC + '/cloud/cloud.cfg.d', glob('config/cloud.cfg.d/*')),
     (ETC + '/cloud/templates', glob('templates/*')),
     (USR_LIB_EXEC + '/cloud-init', ['tools/ds-identify',
                                     'tools/uncloud-init',
                                     'tools/write-ssh-key-fingerprints']),
+    (USR + '/share/bash-completion/completions',
+     ['bash_completion/cloud-init']),
     (USR + '/share/doc/cloud-init', [f for f in glob('doc/*') if is_f(f)]),
     (USR + '/share/doc/cloud-init/examples',
         [f for f in glob('doc/examples/*') if is_f(f)]),
     (USR + '/share/doc/cloud-init/examples/seed',
         [f for f in glob('doc/examples/seed/*') if is_f(f)]),
 ]
-if os.uname()[0] != 'FreeBSD':
+if not platform.system().endswith('BSD'):
     data_files.extend([
         (ETC + '/NetworkManager/dispatcher.d/',
          ['tools/hook-network-manager']),
@@ -282,7 +290,8 @@ setuptools.setup(
     cmdclass=cmdclass,
     entry_points={
         'console_scripts': [
-            'cloud-init = cloudinit.cmd.main:main'
+            'cloud-init = cloudinit.cmd.main:main',
+            'cloud-id = cloudinit.cmd.cloud_id:main'
         ],
     }
 )

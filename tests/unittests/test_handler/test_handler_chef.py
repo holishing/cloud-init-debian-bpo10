@@ -4,7 +4,6 @@ import httpretty
 import json
 import logging
 import os
-import six
 
 from cloudinit import cloud
 from cloudinit.config import cc_chef
@@ -36,13 +35,21 @@ class TestInstallChefOmnibus(HttprettyTestCase):
 
     @mock.patch("cloudinit.config.cc_chef.OMNIBUS_URL", OMNIBUS_URL_HTTP)
     def test_install_chef_from_omnibus_runs_chef_url_content(self):
-        """install_chef_from_omnibus runs downloaded OMNIBUS_URL as script."""
-        chef_outfile = self.tmp_path('chef.out', self.new_root)
-        response = '#!/bin/bash\necho "Hi Mom" > {0}'.format(chef_outfile)
+        """install_chef_from_omnibus calls subp_blob_in_tempfile."""
+        response = b'#!/bin/bash\necho "Hi Mom"'
         httpretty.register_uri(
             httpretty.GET, cc_chef.OMNIBUS_URL, body=response, status=200)
-        cc_chef.install_chef_from_omnibus()
-        self.assertEqual('Hi Mom\n', util.load_file(chef_outfile))
+        ret = (None, None)  # stdout, stderr but capture=False
+
+        with mock.patch("cloudinit.config.cc_chef.util.subp_blob_in_tempfile",
+                        return_value=ret) as m_subp_blob:
+            cc_chef.install_chef_from_omnibus()
+        # admittedly whitebox, but assuming subp_blob_in_tempfile works
+        # this should be fine.
+        self.assertEqual(
+            [mock.call(blob=response, args=[], basename='chef-omnibus-install',
+                       capture=False)],
+            m_subp_blob.call_args_list)
 
     @mock.patch('cloudinit.config.cc_chef.url_helper.readurl')
     @mock.patch('cloudinit.config.cc_chef.util.subp_blob_in_tempfile')
@@ -58,18 +65,18 @@ class TestInstallChefOmnibus(HttprettyTestCase):
         cc_chef.install_chef_from_omnibus()
         expected_kwargs = {'retries': cc_chef.OMNIBUS_URL_RETRIES,
                            'url': cc_chef.OMNIBUS_URL}
-        self.assertItemsEqual(expected_kwargs, m_rdurl.call_args_list[0][1])
+        self.assertCountEqual(expected_kwargs, m_rdurl.call_args_list[0][1])
         cc_chef.install_chef_from_omnibus(retries=10)
         expected_kwargs = {'retries': 10,
                            'url': cc_chef.OMNIBUS_URL}
-        self.assertItemsEqual(expected_kwargs, m_rdurl.call_args_list[1][1])
+        self.assertCountEqual(expected_kwargs, m_rdurl.call_args_list[1][1])
         expected_subp_kwargs = {
             'args': ['-v', '2.0'],
             'basename': 'chef-omnibus-install',
             'blob': m_rdurl.return_value.contents,
             'capture': False
         }
-        self.assertItemsEqual(
+        self.assertCountEqual(
             expected_subp_kwargs,
             m_subp_blob.call_args_list[0][1])
 
@@ -90,7 +97,7 @@ class TestInstallChefOmnibus(HttprettyTestCase):
             'blob': response,
             'capture': False
         }
-        self.assertItemsEqual(expected_kwargs, called_kwargs)
+        self.assertCountEqual(expected_kwargs, called_kwargs)
 
 
 class TestChef(FilesystemMockingTestCase):
@@ -137,6 +144,7 @@ class TestChef(FilesystemMockingTestCase):
         file_backup_path       "/var/backups/chef"
         pid_file               "/var/run/chef/client.pid"
         Chef::Log::Formatter.show_time = true
+        encrypted_data_bag_secret  "/etc/chef/encrypted_data_bag_secret"
         """
         tpl_file = util.load_file('templates/chef_client.rb.tmpl')
         self.patchUtils(self.tmp)
@@ -149,6 +157,8 @@ class TestChef(FilesystemMockingTestCase):
                 'validation_name': 'bob',
                 'validation_key': "/etc/chef/vkey.pem",
                 'validation_cert': "this is my cert",
+                'encrypted_data_bag_secret':
+                    '/etc/chef/encrypted_data_bag_secret'
             },
         }
         cc_chef.handle('chef', cfg, self.fetch_cloud('ubuntu'), LOG, [])
@@ -167,7 +177,7 @@ class TestChef(FilesystemMockingTestCase):
                 continue
             # the value from the cfg overrides that in the default
             val = cfg['chef'].get(k, v)
-            if isinstance(val, six.string_types):
+            if isinstance(val, str):
                 self.assertIn(val, c)
         c = util.load_file(cc_chef.CHEF_FB_PATH)
         self.assertEqual({}, json.loads(c))

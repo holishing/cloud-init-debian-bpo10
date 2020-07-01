@@ -10,14 +10,12 @@
 
 import abc
 import os
-import six
-
-from cloudinit.settings import (PER_ALWAYS, PER_INSTANCE, FREQUENCIES)
 
 from cloudinit import importer
 from cloudinit import log as logging
 from cloudinit import type_utils
 from cloudinit import util
+from cloudinit.settings import (PER_ALWAYS, PER_INSTANCE, FREQUENCIES)
 
 LOG = logging.getLogger(__name__)
 
@@ -41,7 +39,7 @@ PART_HANDLER_FN_TMPL = 'part-handler-%03d'
 # For parts without filenames
 PART_FN_TPL = 'part-%03d'
 
-# Different file beginnings to there content type
+# Different file beginnings to their content type
 INCLUSION_TYPES_MAP = {
     '#include': 'text/x-include-url',
     '#include-once': 'text/x-include-once-url',
@@ -52,6 +50,7 @@ INCLUSION_TYPES_MAP = {
     '#cloud-boothook': 'text/cloud-boothook',
     '#cloud-config-archive': 'text/cloud-config-archive',
     '#cloud-config-jsonp': 'text/cloud-config-jsonp',
+    '## template: jinja': 'text/jinja2',
 }
 
 # Sorted longest first
@@ -59,8 +58,7 @@ INCLUSION_SRCH = sorted(list(INCLUSION_TYPES_MAP.keys()),
                         key=(lambda e: 0 - len(e)))
 
 
-@six.add_metaclass(abc.ABCMeta)
-class Handler(object):
+class Handler(metaclass=abc.ABCMeta):
 
     def __init__(self, frequency, version=2):
         self.handler_version = version
@@ -69,9 +67,13 @@ class Handler(object):
     def __repr__(self):
         return "%s: [%s]" % (type_utils.obj_name(self), self.list_types())
 
-    @abc.abstractmethod
     def list_types(self):
-        raise NotImplementedError()
+        # Each subclass must define the supported content prefixes it handles.
+        if not hasattr(self, 'prefixes'):
+            raise NotImplementedError('Missing prefixes subclass attribute')
+        else:
+            return [INCLUSION_TYPES_MAP[prefix]
+                    for prefix in getattr(self, 'prefixes')]
 
     @abc.abstractmethod
     def handle_part(self, *args, **kwargs):
@@ -154,7 +156,7 @@ def _extract_first_or_bytes(blob, size):
     # Extract the first line or upto X symbols for text objects
     # Extract first X bytes for binary objects
     try:
-        if isinstance(blob, six.string_types):
+        if isinstance(blob, str):
             start = blob.split("\n", 1)[0]
         else:
             # We want to avoid decoding the whole blob (it might be huge)

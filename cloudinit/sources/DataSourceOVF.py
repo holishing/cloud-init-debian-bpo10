@@ -8,17 +8,15 @@
 #
 # This file is part of cloud-init. See LICENSE file for license information.
 
-from xml.dom import minidom
-
 import base64
 import os
 import re
 import time
+from xml.dom import minidom
 
 from cloudinit import log as logging
 from cloudinit import sources
 from cloudinit import util
-
 from cloudinit.sources.helpers.vmware.imc.config \
     import Config
 from cloudinit.sources.helpers.vmware.imc.config_custom_script \
@@ -38,10 +36,15 @@ from cloudinit.sources.helpers.vmware.imc.guestcust_state \
 from cloudinit.sources.helpers.vmware.imc.guestcust_util import (
     enable_nics,
     get_nics_to_enable,
-    set_customization_status
+    set_customization_status,
+    get_tools_config,
+    set_gc_status
 )
 
 LOG = logging.getLogger(__name__)
+
+CONFGROUPNAME_GUESTCUSTOMIZATION = "deployPkg"
+GUESTCUSTOMIZATION_ENABLE_CUST_SCRIPTS = "enable-custom-scripts"
 
 
 class DataSourceOVF(sources.DataSource):
@@ -138,6 +141,8 @@ class DataSourceOVF(sources.DataSource):
             try:
                 cf = ConfigFile(vmwareImcConfigFilePath)
                 self._vmware_cust_conf = Config(cf)
+                set_gc_status(self._vmware_cust_conf, "Started")
+
                 (md, ud, cfg) = read_vmware_imc(self._vmware_cust_conf)
                 self._vmware_nics_to_enable = get_nics_to_enable(nicspath)
                 imcdirpath = os.path.dirname(vmwareImcConfigFilePath)
@@ -146,12 +151,31 @@ class DataSourceOVF(sources.DataSource):
                     product_marker, os.path.join(self.paths.cloud_dir, 'data'))
                 special_customization = product_marker and not hasmarkerfile
                 customscript = self._vmware_cust_conf.custom_script_name
+                custScriptConfig = get_tools_config(
+                    CONFGROUPNAME_GUESTCUSTOMIZATION,
+                    GUESTCUSTOMIZATION_ENABLE_CUST_SCRIPTS,
+                    "false")
+                if custScriptConfig.lower() != "true":
+                    # Update the customization status if there is a
+                    # custom script is disabled
+                    if special_customization and customscript:
+                        msg = "Custom script is disabled by VM Administrator"
+                        LOG.debug(msg)
+                        set_customization_status(
+                            GuestCustStateEnum.GUESTCUST_STATE_RUNNING,
+                            GuestCustErrorEnum.GUESTCUST_ERROR_SCRIPT_DISABLED)
+                        raise RuntimeError(msg)
+
+                ccScriptsDir = os.path.join(
+                    self.paths.get_cpath("scripts"),
+                    "per-instance")
             except Exception as e:
                 _raise_error_status(
                     "Error parsing the customization Config File",
                     e,
                     GuestCustEvent.GUESTCUST_EVENT_CUSTOMIZE_FAILED,
-                    vmwareImcConfigFilePath)
+                    vmwareImcConfigFilePath,
+                    self._vmware_cust_conf)
 
             if special_customization:
                 if customscript:
@@ -163,7 +187,8 @@ class DataSourceOVF(sources.DataSource):
                             "Error executing pre-customization script",
                             e,
                             GuestCustEvent.GUESTCUST_EVENT_CUSTOMIZE_FAILED,
-                            vmwareImcConfigFilePath)
+                            vmwareImcConfigFilePath,
+                            self._vmware_cust_conf)
 
             try:
                 LOG.debug("Preparing the Network configuration")
@@ -177,7 +202,8 @@ class DataSourceOVF(sources.DataSource):
                     "Error preparing Network Configuration",
                     e,
                     GuestCustEvent.GUESTCUST_EVENT_NETWORK_SETUP_FAILED,
-                    vmwareImcConfigFilePath)
+                    vmwareImcConfigFilePath,
+                    self._vmware_cust_conf)
 
             if special_customization:
                 LOG.debug("Applying password customization")
@@ -195,18 +221,22 @@ class DataSourceOVF(sources.DataSource):
                         "Error applying Password Configuration",
                         e,
                         GuestCustEvent.GUESTCUST_EVENT_CUSTOMIZE_FAILED,
-                        vmwareImcConfigFilePath)
+                        vmwareImcConfigFilePath,
+                        self._vmware_cust_conf)
 
                 if customscript:
                     try:
-                        postcust = PostCustomScript(customscript, imcdirpath)
+                        postcust = PostCustomScript(customscript,
+                                                    imcdirpath,
+                                                    ccScriptsDir)
                         postcust.execute()
                     except Exception as e:
                         _raise_error_status(
                             "Error executing post-customization script",
                             e,
                             GuestCustEvent.GUESTCUST_EVENT_CUSTOMIZE_FAILED,
-                            vmwareImcConfigFilePath)
+                            vmwareImcConfigFilePath,
+                            self._vmware_cust_conf)
 
             if product_marker:
                 try:
@@ -218,7 +248,8 @@ class DataSourceOVF(sources.DataSource):
                         "Error creating marker files",
                         e,
                         GuestCustEvent.GUESTCUST_EVENT_CUSTOMIZE_FAILED,
-                        vmwareImcConfigFilePath)
+                        vmwareImcConfigFilePath,
+                        self._vmware_cust_conf)
 
             self._vmware_cust_found = True
             found.append('vmware-tools')
@@ -230,13 +261,14 @@ class DataSourceOVF(sources.DataSource):
             set_customization_status(
                 GuestCustStateEnum.GUESTCUST_STATE_DONE,
                 GuestCustErrorEnum.GUESTCUST_ERROR_SUCCESS)
+            set_gc_status(self._vmware_cust_conf, "Successful")
 
         else:
-            np = {'iso': transport_iso9660,
-                  'vmware-guestd': transport_vmware_guestd, }
+            np = [('com.vmware.guestInfo', transport_vmware_guestinfo),
+                  ('iso', transport_iso9660)]
             name = None
-            for (name, transfunc) in np.items():
-                (contents, _dev, _fname) = transfunc()
+            for name, transfunc in np:
+                contents = transfunc()
                 if contents:
                     break
             if contents:
@@ -275,6 +307,12 @@ class DataSourceOVF(sources.DataSource):
         self.cfg = cfg
         return True
 
+    def _get_subplatform(self):
+        system_type = util.read_dmi_data("system-product-name").lower()
+        if system_type == 'vmware':
+            return 'vmware (%s)' % self.seed
+        return 'ovf (%s)' % self.seed
+
     def get_public_ssh_keys(self):
         if 'public-keys' not in self.metadata:
             return []
@@ -299,7 +337,7 @@ class DataSourceOVFNet(DataSourceOVF):
     def __init__(self, sys_cfg, distro, paths):
         DataSourceOVF.__init__(self, sys_cfg, distro, paths)
         self.seed_dir = os.path.join(paths.seed_dir, 'ovf-net')
-        self.supported_seed_starts = ("http://", "https://", "ftp://")
+        self.supported_seed_starts = ("http://", "https://")
         self.vmware_customization_supported = False
 
 
@@ -374,9 +412,7 @@ def read_vmware_imc(config):
     if config.timezone:
         cfg['timezone'] = config.timezone
 
-    # Generate a unique instance-id so that re-customization will
-    # happen in cloud-init
-    md['instance-id'] = "iid-vmware-" + util.rand_str(strlen=8)
+    md['instance-id'] = "iid-vmware-imc"
     return (md, ud, cfg)
 
 
@@ -428,7 +464,7 @@ def maybe_cdrom_device(devname):
     """
     if not devname:
         return False
-    elif not isinstance(devname, util.string_types):
+    elif not isinstance(devname, str):
         raise ValueError("Unexpected input for devname: %s" % devname)
 
     # resolve '..' and multi '/' elements
@@ -458,8 +494,8 @@ def maybe_cdrom_device(devname):
     return cdmatch.match(devname) is not None
 
 
-# Transport functions take no input and return
-# a 3 tuple of content, path, filename
+# Transport functions are called with no arguments and return
+# either None (indicating not present) or string content of an ovf-env.xml
 def transport_iso9660(require_iso=True):
 
     # Go through mounts to see if it was already mounted
@@ -471,9 +507,9 @@ def transport_iso9660(require_iso=True):
         if not maybe_cdrom_device(dev):
             continue
         mp = info['mountpoint']
-        (fname, contents) = get_ovf_env(mp)
+        (_fname, contents) = get_ovf_env(mp)
         if contents is not False:
-            return (contents, dev, fname)
+            return contents
 
     if require_iso:
         mtype = "iso9660"
@@ -486,29 +522,33 @@ def transport_iso9660(require_iso=True):
             if maybe_cdrom_device(dev)]
     for dev in devs:
         try:
-            (fname, contents) = util.mount_cb(dev, get_ovf_env, mtype=mtype)
+            (_fname, contents) = util.mount_cb(dev, get_ovf_env, mtype=mtype)
         except util.MountFailedError:
             LOG.debug("%s not mountable as iso9660", dev)
             continue
 
         if contents is not False:
-            return (contents, dev, fname)
+            return contents
 
-    return (False, None, None)
+    return None
 
 
-def transport_vmware_guestd():
-    # http://blogs.vmware.com/vapp/2009/07/ \
-    #    selfconfiguration-and-the-ovf-environment.html
-    # try:
-    #     cmd = ['vmware-guestd', '--cmd', 'info-get guestinfo.ovfEnv']
-    #     (out, err) = subp(cmd)
-    #     return(out, 'guestinfo.ovfEnv', 'vmware-guestd')
-    # except:
-    #     # would need to error check here and see why this failed
-    #     # to know if log/error should be raised
-    #     return(False, None, None)
-    return (False, None, None)
+def transport_vmware_guestinfo():
+    rpctool = "vmware-rpctool"
+    not_found = None
+    if not util.which(rpctool):
+        return not_found
+    cmd = [rpctool, "info-get guestinfo.ovfEnv"]
+    try:
+        out, _err = util.subp(cmd)
+        if out:
+            return out
+        LOG.debug("cmd %s exited 0 with empty stdout: %s", cmd, out)
+    except util.ProcessExecutionError as e:
+        if e.exit_code != 1:
+            LOG.warning("%s exited with code %d", rpctool, e.exit_code)
+            LOG.debug(e)
+    return not_found
 
 
 def find_child(node, filter_func):
@@ -616,7 +656,7 @@ def setup_marker_files(markerid, marker_dir):
     open(markerfile, 'w').close()
 
 
-def _raise_error_status(prefix, error, event, config_file):
+def _raise_error_status(prefix, error, event, config_file, conf):
     """
     Raise error and send customization status to the underlying VMware
     Virtualization Platform. Also, cleanup the imc directory.
@@ -625,6 +665,7 @@ def _raise_error_status(prefix, error, event, config_file):
     set_customization_status(
         GuestCustStateEnum.GUESTCUST_STATE_RUNNING,
         event)
+    set_gc_status(conf, prefix)
     util.del_dir(os.path.dirname(config_file))
     raise error
 

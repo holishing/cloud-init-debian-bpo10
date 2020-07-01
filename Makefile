@@ -2,8 +2,6 @@ CWD=$(shell pwd)
 PYVER ?= $(shell for p in python3 python2; do \
 	out=$$(command -v $$p 2>&1) && echo $$p && exit; done; exit 1)
 
-noseopts ?= -v
-
 YAML_FILES=$(shell find cloudinit tests tools -name "*.yaml" -type f )
 YAML_FILES+=$(shell find doc/examples -name "cloud-config*.txt" -type f )
 
@@ -48,10 +46,10 @@ pyflakes3:
 	@$(CWD)/tools/run-pyflakes3
 
 unittest: clean_pyc
-	nosetests $(noseopts) tests/unittests cloudinit
+	python -m pytest -v tests/unittests cloudinit
 
 unittest3: clean_pyc
-	nosetests3 $(noseopts) tests/unittests cloudinit
+	python3 -m pytest -v tests/unittests cloudinit
 
 ci-deps-ubuntu:
 	@$(PYVER) $(CWD)/tools/read-dependencies --distro ubuntu --test-distro
@@ -80,9 +78,10 @@ config/cloud.cfg:
 
 clean_pyc:
 	@find . -type f -name "*.pyc" -delete
+	@find . -type d -name __pycache__ -delete
 
 clean: clean_pyc
-	rm -rf /var/log/cloud-init.log /var/lib/cloud/
+	rm -rf doc/rtd_html .tox .coverage
 
 yaml:
 	@$(PYVER) $(CWD)/tools/validate-yaml.py $(YAML_FILES)
@@ -106,7 +105,9 @@ deb-src:
 		  echo sudo apt-get install devscripts; exit 1; }
 	$(PYVER) ./packages/bddeb -S -d
 
+doc:
+	tox -e doc
 
 .PHONY: test pyflakes pyflakes3 clean pep8 rpm srpm deb deb-src yaml
 .PHONY: check_version pip-test-requirements pip-requirements clean_pyc
-.PHONY: unittest unittest3 style-check
+.PHONY: unittest unittest3 style-check doc

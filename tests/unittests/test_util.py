@@ -2,28 +2,24 @@
 
 from __future__ import print_function
 
+import io
+import json
 import logging
 import os
 import re
 import shutil
 import stat
-import tempfile
-
-import json
-import six
 import sys
+import tempfile
 import yaml
+from unittest import mock
 
 from cloudinit import importer, util
 from cloudinit.tests import helpers
 
-try:
-    from unittest import mock
-except ImportError:
-    import mock
-
 
 BASH = util.which('bash')
+BOGUS_COMMAND = 'this-is-not-expected-to-be-a-program-name'
 
 
 class FakeSelinux(object):
@@ -319,7 +315,7 @@ class TestLoadYaml(helpers.CiTestCase):
 
     def test_python_unicode(self):
         # complex type of python/unicode is explicitly allowed
-        myobj = {'1': six.text_type("FOOBAR")}
+        myobj = {'1': "FOOBAR"}
         safe_yaml = yaml.dump(myobj)
         self.assertEqual(util.load_yaml(blob=safe_yaml,
                                         default=self.mydefault),
@@ -662,8 +658,8 @@ class TestMultiLog(helpers.FilesystemMockingTestCase):
         self.patchOS(self.root)
         self.patchUtils(self.root)
         self.patchOpen(self.root)
-        self.stdout = six.StringIO()
-        self.stderr = six.StringIO()
+        self.stdout = io.StringIO()
+        self.stderr = io.StringIO()
         self.patchStdoutAndStderr(self.stdout, self.stderr)
 
     def test_stderr_used_by_default(self):
@@ -741,7 +737,8 @@ class TestReadSeeded(helpers.TestCase):
 
 
 class TestSubp(helpers.CiTestCase):
-    with_logs = True
+    allowed_subp = [BASH, 'cat', helpers.CiTestCase.SUBP_SHELL_TRUE,
+                    BOGUS_COMMAND, sys.executable]
 
     stdin2err = [BASH, '-c', 'cat >&2']
     stdin2out = ['cat']
@@ -749,7 +746,6 @@ class TestSubp(helpers.CiTestCase):
     utf8_valid = b'start \xc3\xa9 end'
     utf8_valid_2 = b'd\xc3\xa9j\xc8\xa7'
     printenv = [BASH, '-c', 'for n in "$@"; do echo "$n=${!n}"; done', '--']
-    bogus_command = 'this-is-not-expected-to-be-a-program-name'
 
     def printf_cmd(self, *args):
         # bash's printf supports \xaa.  So does /usr/bin/printf
@@ -848,9 +844,10 @@ class TestSubp(helpers.CiTestCase):
         util.write_file(noshebang, 'true\n')
 
         os.chmod(noshebang, os.stat(noshebang).st_mode | stat.S_IEXEC)
-        self.assertRaisesRegex(util.ProcessExecutionError,
-                               r'Missing #! in script\?',
-                               util.subp, (noshebang,))
+        with self.allow_subp([noshebang]):
+            self.assertRaisesRegex(util.ProcessExecutionError,
+                                   r'Missing #! in script\?',
+                                   util.subp, (noshebang,))
 
     def test_subp_combined_stderr_stdout(self):
         """Providing combine_capture as True redirects stderr to stdout."""
@@ -868,16 +865,16 @@ class TestSubp(helpers.CiTestCase):
     def test_exception_has_out_err_are_bytes_if_decode_false(self):
         """Raised exc should have stderr, stdout as bytes if no decode."""
         with self.assertRaises(util.ProcessExecutionError) as cm:
-            util.subp([self.bogus_command], decode=False)
+            util.subp([BOGUS_COMMAND], decode=False)
         self.assertTrue(isinstance(cm.exception.stdout, bytes))
         self.assertTrue(isinstance(cm.exception.stderr, bytes))
 
     def test_exception_has_out_err_are_bytes_if_decode_true(self):
         """Raised exc should have stderr, stdout as string if no decode."""
         with self.assertRaises(util.ProcessExecutionError) as cm:
-            util.subp([self.bogus_command], decode=True)
-        self.assertTrue(isinstance(cm.exception.stdout, six.string_types))
-        self.assertTrue(isinstance(cm.exception.stderr, six.string_types))
+            util.subp([BOGUS_COMMAND], decode=True)
+        self.assertTrue(isinstance(cm.exception.stdout, str))
+        self.assertTrue(isinstance(cm.exception.stderr, str))
 
     def test_bunch_of_slashes_in_path(self):
         self.assertEqual("/target/my/path/",
@@ -925,10 +922,10 @@ class TestSubp(helpers.CiTestCase):
             logs.append(log)
 
         with self.assertRaises(util.ProcessExecutionError):
-            util.subp([self.bogus_command], status_cb=status_cb)
+            util.subp([BOGUS_COMMAND], status_cb=status_cb)
 
         expected = [
-            'Begin run command: {cmd}\n'.format(cmd=self.bogus_command),
+            'Begin run command: {cmd}\n'.format(cmd=BOGUS_COMMAND),
             'ERROR: End run command: invalid command provided\n']
         self.assertEqual(expected, logs)
 
@@ -940,13 +937,13 @@ class TestSubp(helpers.CiTestCase):
             logs.append(log)
 
         with self.assertRaises(util.ProcessExecutionError):
-            util.subp(['ls', '/I/dont/exist'], status_cb=status_cb)
-        util.subp(['ls'], status_cb=status_cb)
+            util.subp([BASH, '-c', 'exit 2'], status_cb=status_cb)
+        util.subp([BASH, '-c', 'exit 0'], status_cb=status_cb)
 
         expected = [
-            'Begin run command: ls /I/dont/exist\n',
+            'Begin run command: %s -c exit 2\n' % BASH,
             'ERROR: End run command: exit(2)\n',
-            'Begin run command: ls\n',
+            'Begin run command: %s -c exit 0\n' % BASH,
             'End run command: exit(0)\n']
         self.assertEqual(expected, logs)
 
@@ -1167,5 +1164,104 @@ class TestGetProcEnv(helpers.TestCase):
         m_load_file.side_effect = OSError("File does not exist.")
         self.assertEqual({}, util.get_proc_env(1))
         self.assertEqual(1, m_load_file.call_count)
+
+    def test_get_proc_ppid(self):
+        """get_proc_ppid returns correct parent pid value."""
+        my_pid = os.getpid()
+        my_ppid = os.getppid()
+        self.assertEqual(my_ppid, util.get_proc_ppid(my_pid))
+
+
+@mock.patch('cloudinit.util.subp')
+def test_find_devs_with_openbsd(m_subp):
+    m_subp.return_value = (
+        'cd0:,sd0:630d98d32b5d3759,sd1:,fd0:', ''
+    )
+    devlist = util.find_devs_with_openbsd()
+    assert devlist == ['/dev/cd0a', '/dev/sd1i']
+
+
+@mock.patch('cloudinit.util.subp')
+def test_find_devs_with_openbsd_with_criteria(m_subp):
+    m_subp.return_value = (
+        'cd0:,sd0:630d98d32b5d3759,sd1:,fd0:', ''
+    )
+    devlist = util.find_devs_with_openbsd(criteria="TYPE=iso9660")
+    assert devlist == ['/dev/cd0a']
+
+
+@mock.patch('glob.glob')
+def test_find_devs_with_freebsd(m_glob):
+    def fake_glob(pattern):
+        msdos = ["/dev/msdosfs/EFISYS"]
+        iso9660 = ["/dev/iso9660/config-2"]
+        if pattern == "/dev/msdosfs/*":
+            return msdos
+        elif pattern == "/dev/iso9660/*":
+            return iso9660
+        raise Exception
+    m_glob.side_effect = fake_glob
+
+    devlist = util.find_devs_with_freebsd()
+    assert set(devlist) == set([
+        '/dev/iso9660/config-2', '/dev/msdosfs/EFISYS'])
+    devlist = util.find_devs_with_freebsd(criteria="TYPE=iso9660")
+    assert devlist == ['/dev/iso9660/config-2']
+    devlist = util.find_devs_with_freebsd(criteria="TYPE=vfat")
+    assert devlist == ['/dev/msdosfs/EFISYS']
+
+
+@mock.patch("cloudinit.util.subp")
+def test_find_devs_with_netbsd(m_subp):
+    side_effect_values = [
+        ("ld0 dk0 dk1 cd0", ""),
+        (
+            (
+                "mscdlabel: CDIOREADTOCHEADER: "
+                "Inappropriate ioctl for device\n"
+                "track (ctl=4) at sector 0\n"
+                "disklabel not written\n"
+            ),
+            "",
+        ),
+        (
+            (
+                "mscdlabel: CDIOREADTOCHEADER: "
+                "Inappropriate ioctl for device\n"
+                "track (ctl=4) at sector 0\n"
+                "disklabel not written\n"
+            ),
+            "",
+        ),
+        (
+            (
+                "mscdlabel: CDIOREADTOCHEADER: "
+                "Inappropriate ioctl for device\n"
+                "track (ctl=4) at sector 0\n"
+                "disklabel not written\n"
+            ),
+            "",
+        ),
+        (
+            (
+                "track (ctl=4) at sector 0\n"
+                'ISO filesystem, label "config-2", '
+                "creation time: 2020/03/31 17:29\n"
+                "adding as 'a'\n"
+            ),
+            "",
+        ),
+    ]
+    m_subp.side_effect = side_effect_values
+    devlist = util.find_devs_with_netbsd()
+    assert set(devlist) == set(
+        ["/dev/ld0", "/dev/dk0", "/dev/dk1", "/dev/cd0"]
+    )
+    m_subp.side_effect = side_effect_values
+    devlist = util.find_devs_with_netbsd(criteria="TYPE=iso9660")
+    assert devlist == ["/dev/cd0"]
+    m_subp.side_effect = side_effect_values
+    devlist = util.find_devs_with_netbsd(criteria="TYPE=vfat")
+    assert devlist == ["/dev/ld0", "/dev/dk0", "/dev/dk1"]
 
 # vi: ts=4 expandtab

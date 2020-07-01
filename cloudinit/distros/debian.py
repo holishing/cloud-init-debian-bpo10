@@ -29,28 +29,29 @@ APT_GET_WRAPPER = {
     'enabled': 'auto',
 }
 
-ENI_HEADER = """# This file is generated from information provided by
-# the datasource.  Changes to it will not persist across an instance.
-# To disable cloud-init's network configuration capabilities, write a file
+NETWORK_FILE_HEADER = """\
+# This file is generated from information provided by the datasource.  Changes
+# to it will not persist across an instance reboot.  To disable cloud-init's
+# network configuration capabilities, write a file
 # /etc/cloud/cloud.cfg.d/99-disable-network-config.cfg with the following:
 # network: {config: disabled}
 """
 
-NETWORK_CONF_FN = "/etc/network/interfaces.d/50-cloud-init.cfg"
+NETWORK_CONF_FN = "/etc/network/interfaces.d/50-cloud-init"
 LOCALE_CONF_FN = "/etc/default/locale"
 
 
 class Distro(distros.Distro):
     hostname_conf_fn = "/etc/hostname"
     network_conf_fn = {
-        "eni": "/etc/network/interfaces.d/50-cloud-init.cfg",
+        "eni": "/etc/network/interfaces.d/50-cloud-init",
         "netplan": "/etc/netplan/50-cloud-init.yaml"
     }
     renderer_configs = {
         "eni": {"eni_path": network_conf_fn["eni"],
-                "eni_header": ENI_HEADER},
+                "eni_header": NETWORK_FILE_HEADER},
         "netplan": {"netplan_path": network_conf_fn["netplan"],
-                    "netplan_header": ENI_HEADER,
+                    "netplan_header": NETWORK_FILE_HEADER,
                     "postcmds": True}
     }
 
@@ -108,11 +109,6 @@ class Distro(distros.Distro):
     def install_packages(self, pkglist):
         self.update_package_sources()
         self.package_command('install', pkgs=pkglist)
-
-    def _write_network(self, settings):
-        # this is a legacy method, it will always write eni
-        util.write_file(self.network_conf_fn["eni"], settings)
-        return ['all']
 
     def _write_network_config(self, netconfig):
         _maybe_remove_legacy_eth0()
@@ -209,8 +205,7 @@ class Distro(distros.Distro):
                          ["update"], freq=PER_INSTANCE)
 
     def get_primary_arch(self):
-        (arch, _err) = util.subp(['dpkg', '--print-architecture'])
-        return str(arch).strip()
+        return util.get_dpkg_architecture()
 
 
 def _get_wrapper_prefix(cmd, mode):

@@ -12,10 +12,8 @@ from time import time
 
 import contextlib
 import os
-
-from six import StringIO
-from six.moves.configparser import (
-    NoSectionError, NoOptionError, RawConfigParser)
+from configparser import NoSectionError, NoOptionError, RawConfigParser
+from io import StringIO
 
 from cloudinit.settings import (PER_INSTANCE, PER_ALWAYS, PER_ONCE,
                                 CFG_ENV_NAME)
@@ -239,6 +237,10 @@ class ConfigMerger(object):
             if cc_fn and os.path.isfile(cc_fn):
                 try:
                     i_cfgs.append(util.read_conf(cc_fn))
+                except PermissionError:
+                    LOG.debug(
+                        'Skipped loading cloud-config from %s due to'
+                        ' non-root.', cc_fn)
                 except Exception:
                     util.logexc(LOG, 'Failed loading of cloud-config from %s',
                                 cc_fn)
@@ -448,5 +450,9 @@ class DefaultingConfigParser(RawConfigParser):
         if header:
             contents = '\n'.join([header, contents, ''])
         return contents
+
+
+def identity(object):
+    return object
 
 # vi: ts=4 expandtab

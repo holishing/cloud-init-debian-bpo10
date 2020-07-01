@@ -1,5 +1,5 @@
 # Copyright (C) 2013 Canonical Ltd.
-# Copyright (c) 2018, Joyent, Inc.
+# Copyright 2019 Joyent, Inc.
 #
 # Author: Ben Howard <ben.howard@canonical.com>
 #
@@ -34,6 +34,7 @@ from cloudinit import log as logging
 from cloudinit import serial
 from cloudinit import sources
 from cloudinit import util
+from cloudinit.event import EventType
 
 LOG = logging.getLogger(__name__)
 
@@ -178,6 +179,7 @@ class DataSourceSmartOS(sources.DataSource):
         self.metadata = {}
         self.network_data = None
         self._network_config = None
+        self.update_events['network'].add(EventType.BOOT)
 
         self.script_base_d = os.path.join(self.paths.get_cpath("scripts"))
 
@@ -303,6 +305,9 @@ class DataSourceSmartOS(sources.DataSource):
         self._set_provisioned()
         return True
 
+    def _get_subplatform(self):
+        return 'serial (%s)' % SERIAL_DEVICE
+
     def device_name_to_device(self, name):
         return self.ds_cfg['disk_aliases'].get(name)
 
@@ -316,6 +321,10 @@ class DataSourceSmartOS(sources.DataSource):
 
     @property
     def network_config(self):
+        # sources.clear_cached_data() may set _network_config to '_unset'.
+        if self._network_config == sources.UNSET:
+            self._network_config = None
+
         if self._network_config is None:
             if self.network_data is not None:
                 self._network_config = (
@@ -564,7 +573,7 @@ class JoyentMetadataSerialClient(JoyentMetadataClient):
                     continue
                 LOG.warning('Unexpected response "%s" during flush', response)
             except JoyentMetadataTimeoutException:
-                LOG.warning('Timeout while initializing metadata client. ' +
+                LOG.warning('Timeout while initializing metadata client. '
                             'Is the host metadata service running?')
         LOG.debug('Got "invalid command".  Flush complete.')
         self.fp.timeout = timeout
@@ -683,6 +692,18 @@ def jmc_client_factory(
     raise ValueError("Unknown value for smartos_type: %s" % smartos_type)
 
 
+def identify_file(content_f):
+    cmd = ["file", "--brief", "--mime-type", content_f]
+    f_type = None
+    try:
+        (f_type, _err) = util.subp(cmd)
+        LOG.debug("script %s mime type is %s", content_f, f_type)
+    except util.ProcessExecutionError as e:
+        util.logexc(
+            LOG, ("Failed to identify script type for %s" % content_f, e))
+    return None if f_type is None else f_type.strip()
+
+
 def write_boot_content(content, content_f, link=None, shebang=False,
                        mode=0o400):
     """
@@ -715,18 +736,11 @@ def write_boot_content(content, content_f, link=None, shebang=False,
     util.write_file(content_f, content, mode=mode)
 
     if shebang and not content.startswith("#!"):
-        try:
-            cmd = ["file", "--brief", "--mime-type", content_f]
-            (f_type, _err) = util.subp(cmd)
-            LOG.debug("script %s mime type is %s", content_f, f_type)
-            if f_type.strip() == "text/plain":
-                new_content = "\n".join(["#!/bin/bash", content])
-                util.write_file(content_f, new_content, mode=mode)
-                LOG.debug("added shebang to file %s", content_f)
-
-        except Exception as e:
-            util.logexc(LOG, ("Failed to identify script type for %s" %
-                              content_f, e))
+        f_type = identify_file(content_f)
+        if f_type == "text/plain":
+            util.write_file(
+                content_f, "\n".join(["#!/bin/bash", content]), mode=mode)
+            LOG.debug("added shebang to file %s", content_f)
 
     if link:
         try:

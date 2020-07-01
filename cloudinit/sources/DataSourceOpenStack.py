@@ -13,6 +13,7 @@ from cloudinit import url_helper
 from cloudinit import util
 
 from cloudinit.sources.helpers import openstack
+from cloudinit.sources import DataSourceOracle as oracle
 
 LOG = logging.getLogger(__name__)
 
@@ -28,7 +29,10 @@ DMI_PRODUCT_NOVA = 'OpenStack Nova'
 DMI_PRODUCT_COMPUTE = 'OpenStack Compute'
 VALID_DMI_PRODUCT_NAMES = [DMI_PRODUCT_NOVA, DMI_PRODUCT_COMPUTE]
 DMI_ASSET_TAG_OPENTELEKOM = 'OpenTelekomCloud'
-VALID_DMI_ASSET_TAGS = [DMI_ASSET_TAG_OPENTELEKOM]
+# See github.com/sapcc/helm-charts/blob/master/openstack/nova/values.yaml
+# -> compute.defaults.vmware.smbios_asset_tag for this value
+DMI_ASSET_TAG_SAPCCLOUD = 'SAP CCloud VM'
+VALID_DMI_ASSET_TAGS = [DMI_ASSET_TAG_OPENTELEKOM, DMI_ASSET_TAG_SAPCCLOUD]
 
 
 class DataSourceOpenStack(openstack.SourceMixin, sources.DataSource):
@@ -75,7 +79,7 @@ class DataSourceOpenStack(openstack.SourceMixin, sources.DataSource):
 
         url_params = self.get_url_params()
         start_time = time.time()
-        avail_url = url_helper.wait_for_url(
+        avail_url, _response = url_helper.wait_for_url(
             urls=md_urls, max_wait=url_params.max_wait_seconds,
             timeout=url_params.timeout_seconds)
         if avail_url:
@@ -121,8 +125,10 @@ class DataSourceOpenStack(openstack.SourceMixin, sources.DataSource):
             False when unable to contact metadata service or when metadata
             format is invalid or disabled.
         """
-        if not detect_openstack():
+        oracle_considered = 'Oracle' in self.sys_cfg.get('datasource_list')
+        if not detect_openstack(accept_oracle=not oracle_considered):
             return False
+
         if self.perform_dhcp_setup:  # Setup networking in init-local stage.
             try:
                 with EphemeralDHCPv4(self.fallback_interface):
@@ -214,7 +220,7 @@ def read_metadata_service(base_url, ssl_details=None,
     return reader.read_v2()
 
 
-def detect_openstack():
+def detect_openstack(accept_oracle=False):
     """Return True when a potential OpenStack platform is detected."""
     if not util.is_x86():
         return True  # Non-Intel cpus don't properly report dmi product names
@@ -222,6 +228,8 @@ def detect_openstack():
     if product_name in VALID_DMI_PRODUCT_NAMES:
         return True
     elif util.read_dmi_data('chassis-asset-tag') in VALID_DMI_ASSET_TAGS:
+        return True
+    elif accept_oracle and oracle._is_platform_viable():
         return True
     elif util.get_proc_env(1).get('product_name') == DMI_PRODUCT_NOVA:
         return True

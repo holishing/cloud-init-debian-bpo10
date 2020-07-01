@@ -2,11 +2,15 @@
 # Copyright (C) 2016 VMware INC.
 #
 # Author: Sankar Tanguturi <stanguturi@vmware.com>
+#         Pengpeng Sun <pengpengs@vmware.com>
 #
 # This file is part of cloud-init. See LICENSE file for license information.
 
 import logging
+import os
 import sys
+import tempfile
+import textwrap
 
 from cloudinit.sources.DataSourceOVF import get_network_config_from_conf
 from cloudinit.sources.DataSourceOVF import read_vmware_imc
@@ -58,13 +62,13 @@ class TestVmwareConfigFile(CiTestCase):
 
         (md1, _, _) = read_vmware_imc(conf)
         self.assertIn(instance_id_prefix, md1["instance-id"])
-        self.assertEqual(len(md1["instance-id"]), len(instance_id_prefix) + 8)
+        self.assertEqual(md1["instance-id"], 'iid-vmware-imc')
 
         (md2, _, _) = read_vmware_imc(conf)
         self.assertIn(instance_id_prefix, md2["instance-id"])
-        self.assertEqual(len(md2["instance-id"]), len(instance_id_prefix) + 8)
+        self.assertEqual(md2["instance-id"], 'iid-vmware-imc')
 
-        self.assertNotEqual(md1["instance-id"], md2["instance-id"])
+        self.assertEqual(md2["instance-id"], md1["instance-id"])
 
     def test_configfile_static_2nics(self):
         """Tests Config class for a configuration with two static NICs."""
@@ -259,7 +263,7 @@ class TestVmwareConfigFile(CiTestCase):
         nicConfigurator = NicConfigurator(config.nics, False)
         nics_cfg_list = nicConfigurator.generate()
 
-        self.assertEqual(5, len(nics_cfg_list), "number of elements")
+        self.assertEqual(2, len(nics_cfg_list), "number of elements")
 
         nic1 = {'name': 'NIC1'}
         nic2 = {'name': 'NIC2'}
@@ -271,8 +275,6 @@ class TestVmwareConfigFile(CiTestCase):
                     nic1.update(cfg)
                 elif cfg.get('name') == nic2.get('name'):
                     nic2.update(cfg)
-            elif cfg_type == 'route':
-                route_list.append(cfg)
 
         self.assertEqual('physical', nic1.get('type'), 'type of NIC1')
         self.assertEqual('NIC1', nic1.get('name'), 'name of NIC1')
@@ -293,6 +295,9 @@ class TestVmwareConfigFile(CiTestCase):
                 static6_subnet.append(subnet)
             else:
                 self.assertEqual(True, False, 'Unknown type')
+            if 'route' in subnet:
+                for route in subnet.get('routes'):
+                    route_list.append(route)
 
         self.assertEqual(1, len(static_subnet), 'Number of static subnet')
         self.assertEqual(1, len(static6_subnet), 'Number of static6 subnet')
@@ -342,5 +347,169 @@ class TestVmwareConfigFile(CiTestCase):
         cf._insertKey("CUSTOM-SCRIPT|SCRIPT-NAME", "test-script")
         conf = Config(cf)
         self.assertEqual("test-script", conf.custom_script_name)
+
+    def test_post_gc_status(self):
+        cf = ConfigFile("tests/data/vmware/cust-dhcp-2nic.cfg")
+        conf = Config(cf)
+        self.assertFalse(conf.post_gc_status)
+        cf._insertKey("MISC|POST-GC-STATUS", "YES")
+        conf = Config(cf)
+        self.assertTrue(conf.post_gc_status)
+
+
+class TestVmwareNetConfig(CiTestCase):
+    """Test conversion of vmware config to cloud-init config."""
+
+    maxDiff = None
+
+    def _get_NicConfigurator(self, text):
+        fp = None
+        try:
+            with tempfile.NamedTemporaryFile(mode="w", dir=self.tmp_dir(),
+                                             delete=False) as fp:
+                fp.write(text)
+                fp.close()
+            cfg = Config(ConfigFile(fp.name))
+            return NicConfigurator(cfg.nics, use_system_devices=False)
+        finally:
+            if fp:
+                os.unlink(fp.name)
+
+    def test_non_primary_nic_without_gateway(self):
+        """A non primary nic set is not required to have a gateway."""
+        config = textwrap.dedent("""\
+            [NETWORK]
+            NETWORKING = yes
+            BOOTPROTO = dhcp
+            HOSTNAME = myhost1
+            DOMAINNAME = eng.vmware.com
+
+            [NIC-CONFIG]
+            NICS = NIC1
+
+            [NIC1]
+            MACADDR = 00:50:56:a6:8c:08
+            ONBOOT = yes
+            IPv4_MODE = BACKWARDS_COMPATIBLE
+            BOOTPROTO = static
+            IPADDR = 10.20.87.154
+            NETMASK = 255.255.252.0
+            """)
+        nc = self._get_NicConfigurator(config)
+        self.assertEqual(
+            [{'type': 'physical', 'name': 'NIC1',
+              'mac_address': '00:50:56:a6:8c:08',
+              'subnets': [
+                  {'control': 'auto', 'type': 'static',
+                   'address': '10.20.87.154', 'netmask': '255.255.252.0'}]}],
+            nc.generate())
+
+    def test_non_primary_nic_with_gateway(self):
+        """A non primary nic set can have a gateway."""
+        config = textwrap.dedent("""\
+            [NETWORK]
+            NETWORKING = yes
+            BOOTPROTO = dhcp
+            HOSTNAME = myhost1
+            DOMAINNAME = eng.vmware.com
+
+            [NIC-CONFIG]
+            NICS = NIC1
+
+            [NIC1]
+            MACADDR = 00:50:56:a6:8c:08
+            ONBOOT = yes
+            IPv4_MODE = BACKWARDS_COMPATIBLE
+            BOOTPROTO = static
+            IPADDR = 10.20.87.154
+            NETMASK = 255.255.252.0
+            GATEWAY = 10.20.87.253
+            """)
+        nc = self._get_NicConfigurator(config)
+        self.assertEqual(
+            [{'type': 'physical', 'name': 'NIC1',
+              'mac_address': '00:50:56:a6:8c:08',
+              'subnets': [
+                  {'control': 'auto', 'type': 'static',
+                   'address': '10.20.87.154', 'netmask': '255.255.252.0',
+                   'routes':
+                       [{'type': 'route', 'destination': '10.20.84.0/22',
+                         'gateway': '10.20.87.253', 'metric': 10000}]}]}],
+            nc.generate())
+
+    def test_cust_non_primary_nic_with_gateway_(self):
+        """A customer non primary nic set can have a gateway."""
+        config = textwrap.dedent("""\
+            [NETWORK]
+            NETWORKING = yes
+            BOOTPROTO = dhcp
+            HOSTNAME = static-debug-vm
+            DOMAINNAME = cluster.local
+
+            [NIC-CONFIG]
+            NICS = NIC1
+
+            [NIC1]
+            MACADDR = 00:50:56:ac:d1:8a
+            ONBOOT = yes
+            IPv4_MODE = BACKWARDS_COMPATIBLE
+            BOOTPROTO = static
+            IPADDR = 100.115.223.75
+            NETMASK = 255.255.255.0
+            GATEWAY = 100.115.223.254
+
+
+            [DNS]
+            DNSFROMDHCP=no
+
+            NAMESERVER|1 = 8.8.8.8
+
+            [DATETIME]
+            UTC = yes
+            """)
+        nc = self._get_NicConfigurator(config)
+        self.assertEqual(
+            [{'type': 'physical', 'name': 'NIC1',
+              'mac_address': '00:50:56:ac:d1:8a',
+              'subnets': [
+                  {'control': 'auto', 'type': 'static',
+                   'address': '100.115.223.75', 'netmask': '255.255.255.0',
+                   'routes':
+                       [{'type': 'route', 'destination': '100.115.223.0/24',
+                         'gateway': '100.115.223.254', 'metric': 10000}]}]}],
+            nc.generate())
+
+    def test_a_primary_nic_with_gateway(self):
+        """A primary nic set can have a gateway."""
+        config = textwrap.dedent("""\
+            [NETWORK]
+            NETWORKING = yes
+            BOOTPROTO = dhcp
+            HOSTNAME = myhost1
+            DOMAINNAME = eng.vmware.com
+
+            [NIC-CONFIG]
+            NICS = NIC1
+
+            [NIC1]
+            MACADDR = 00:50:56:a6:8c:08
+            ONBOOT = yes
+            IPv4_MODE = BACKWARDS_COMPATIBLE
+            BOOTPROTO = static
+            IPADDR = 10.20.87.154
+            NETMASK = 255.255.252.0
+            PRIMARY = true
+            GATEWAY = 10.20.87.253
+            """)
+        nc = self._get_NicConfigurator(config)
+        self.assertEqual(
+            [{'type': 'physical', 'name': 'NIC1',
+              'mac_address': '00:50:56:a6:8c:08',
+              'subnets': [
+                  {'control': 'auto', 'type': 'static',
+                   'address': '10.20.87.154', 'netmask': '255.255.252.0',
+                   'gateway': '10.20.87.253'}]}],
+            nc.generate())
+
 
 # vi: ts=4 expandtab

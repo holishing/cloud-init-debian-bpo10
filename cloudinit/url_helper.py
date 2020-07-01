@@ -8,39 +8,31 @@
 #
 # This file is part of cloud-init. See LICENSE file for license information.
 
+import copy
 import json
 import os
-import requests
-import six
 import time
-
 from email.utils import parsedate
 from errno import ENOENT
 from functools import partial
+from http.client import NOT_FOUND
 from itertools import count
-from requests import exceptions
+from urllib.parse import urlparse, urlunparse, quote
 
-from six.moves.urllib.parse import (
-    urlparse, urlunparse,
-    quote as urlquote)
+import requests
+from requests import exceptions
 
 from cloudinit import log as logging
 from cloudinit import version
 
 LOG = logging.getLogger(__name__)
 
-if six.PY2:
-    import httplib
-    NOT_FOUND = httplib.NOT_FOUND
-else:
-    import http.client
-    NOT_FOUND = http.client.NOT_FOUND
-
 
 # Check if requests has ssl support (added in requests >= 0.8.8)
 SSL_ENABLED = False
 CONFIG_ENABLED = False  # This was added in 0.7 (but taken out in >=1.0)
 _REQ_VER = None
+REDACTED = 'REDACTED'
 try:
     from distutils.version import LooseVersion
     import pkg_resources
@@ -71,7 +63,7 @@ def combine_url(base, *add_ons):
         path = url_parsed[2]
         if path and not path.endswith("/"):
             path += "/"
-        path += urlquote(str(add_on), safe="/:")
+        path += quote(str(add_on), safe="/:")
         url_parsed[2] = path
         return urlunparse(url_parsed)
 
@@ -81,14 +73,19 @@ def combine_url(base, *add_ons):
     return url
 
 
-def read_file_or_url(url, timeout=5, retries=10,
-                     headers=None, data=None, sec_between=1, ssl_details=None,
-                     headers_cb=None, exception_cb=None):
+def read_file_or_url(url, **kwargs):
+    """Wrapper function around readurl to allow passing a file path as url.
+
+    When url is not a local file path, passthrough any kwargs to readurl.
+
+    In the case of parameter passthrough to readurl, default values for some
+    parameters. See: call-signature of readurl in this module for param docs.
+    """
     url = url.lstrip()
     if url.startswith("/"):
         url = "file://%s" % url
     if url.lower().startswith("file://"):
-        if data:
+        if kwargs.get("data"):
             LOG.warning("Unable to post data to file resource %s", url)
         file_path = url[len("file://"):]
         try:
@@ -101,10 +98,7 @@ def read_file_or_url(url, timeout=5, retries=10,
             raise UrlError(cause=e, code=code, headers=None, url=url)
         return FileResponse(file_path, contents=contents)
     else:
-        return readurl(url, timeout=timeout, retries=retries, headers=headers,
-                       headers_cb=headers_cb, data=data,
-                       sec_between=sec_between, ssl_details=ssl_details,
-                       exception_cb=exception_cb)
+        return readurl(url, **kwargs)
 
 
 # Made to have same accessors as UrlResponse so that the
@@ -197,20 +191,53 @@ def _get_ssl_args(url, ssl_details):
 
 
 def readurl(url, data=None, timeout=None, retries=0, sec_between=1,
-            headers=None, headers_cb=None, ssl_details=None,
-            check_status=True, allow_redirects=True, exception_cb=None,
-            session=None, infinite=False):
+            headers=None, headers_cb=None, headers_redact=None,
+            ssl_details=None, check_status=True, allow_redirects=True,
+            exception_cb=None, session=None, infinite=False, log_req_resp=True,
+            request_method=None):
+    """Wrapper around requests.Session to read the url and retry if necessary
+
+    :param url: Mandatory url to request.
+    :param data: Optional form data to post the URL. Will set request_method
+        to 'POST' if present.
+    :param timeout: Timeout in seconds to wait for a response
+    :param retries: Number of times to retry on exception if exception_cb is
+        None or exception_cb returns True for the exception caught. Default is
+        to fail with 0 retries on exception.
+    :param sec_between: Default 1: amount of seconds passed to time.sleep
+        between retries. None or -1 means don't sleep.
+    :param headers: Optional dict of headers to send during request
+    :param headers_cb: Optional callable returning a dict of values to send as
+        headers during request
+    :param headers_redact: Optional list of header names to redact from the log
+    :param ssl_details: Optional dict providing key_file, ca_certs, and
+        cert_file keys for use on in ssl connections.
+    :param check_status: Optional boolean set True to raise when HTTPError
+        occurs. Default: True.
+    :param allow_redirects: Optional boolean passed straight to Session.request
+        as 'allow_redirects'. Default: True.
+    :param exception_cb: Optional callable which accepts the params
+        msg and exception and returns a boolean True if retries are permitted.
+    :param session: Optional exiting requests.Session instance to reuse.
+    :param infinite: Bool, set True to retry indefinitely. Default: False.
+    :param log_req_resp: Set False to turn off verbose debug messages.
+    :param request_method: String passed as 'method' to Session.request.
+        Typically GET, or POST. Default: POST if data is provided, GET
+        otherwise.
+    """
     url = _cleanurl(url)
     req_args = {
         'url': url,
     }
     req_args.update(_get_ssl_args(url, ssl_details))
     req_args['allow_redirects'] = allow_redirects
-    req_args['method'] = 'GET'
+    if not request_method:
+        request_method = 'POST' if data else 'GET'
+    req_args['method'] = request_method
     if timeout is not None:
         req_args['timeout'] = max(float(timeout), 0)
-    if data:
-        req_args['method'] = 'POST'
+    if headers_redact is None:
+        headers_redact = []
     # It doesn't seem like config
     # was added in older library versions (or newer ones either), thus we
     # need to manually do the retries if it wasn't...
@@ -254,11 +281,20 @@ def readurl(url, data=None, timeout=None, retries=0, sec_between=1,
         for (k, v) in req_args.items():
             if k == 'data':
                 continue
-            filtered_req_args[k] = v
+            if k == 'headers' and headers_redact:
+                matched_headers = [k for k in headers_redact if v.get(k)]
+                if matched_headers:
+                    filtered_req_args[k] = copy.deepcopy(v)
+                    for key in matched_headers:
+                        filtered_req_args[k][key] = REDACTED
+            else:
+                filtered_req_args[k] = v
         try:
-            LOG.debug("[%s/%s] open '%s' with %s configuration", i,
-                      "infinite" if infinite else manual_tries, url,
-                      filtered_req_args)
+
+            if log_req_resp:
+                LOG.debug("[%s/%s] open '%s' with %s configuration", i,
+                          "infinite" if infinite else manual_tries, url,
+                          filtered_req_args)
 
             if session is None:
                 session = requests.Session()
@@ -294,17 +330,20 @@ def readurl(url, data=None, timeout=None, retries=0, sec_between=1,
                 break
             if (infinite and sec_between > 0) or \
                (i + 1 < manual_tries and sec_between > 0):
-                LOG.debug("Please wait %s seconds while we wait to try again",
-                          sec_between)
+
+                if log_req_resp:
+                    LOG.debug(
+                        "Please wait %s seconds while we wait to try again",
+                        sec_between)
                 time.sleep(sec_between)
     if excps:
         raise excps[-1]
     return None  # Should throw before this...
 
 
-def wait_for_url(urls, max_wait=None, timeout=None,
-                 status_cb=None, headers_cb=None, sleep_time=1,
-                 exception_cb=None, sleep_time_cb=None):
+def wait_for_url(urls, max_wait=None, timeout=None, status_cb=None,
+                 headers_cb=None, headers_redact=None, sleep_time=1,
+                 exception_cb=None, sleep_time_cb=None, request_method=None):
     """
     urls:      a list of urls to try
     max_wait:  roughly the maximum time to wait before giving up
@@ -315,15 +354,18 @@ def wait_for_url(urls, max_wait=None, timeout=None,
     status_cb: call method with string message when a url is not available
     headers_cb: call method with single argument of url to get headers
                 for request.
+    headers_redact: a list of header names to redact from the log
     exception_cb: call method with 2 arguments 'msg' (per status_cb) and
                   'exception', the exception that occurred.
     sleep_time_cb: call method with 2 arguments (response, loop_n) that
                    generates the next sleep time.
+    request_method: indicate the type of HTTP request, GET, PUT, or POST
+    returns: tuple of (url, response contents), on failure, (False, None)
 
-    the idea of this routine is to wait for the EC2 metdata service to
+    the idea of this routine is to wait for the EC2 metadata service to
     come up.  On both Eucalyptus and EC2 we have seen the case where
     the instance hit the MD before the MD service was up.  EC2 seems
-    to have permenantely fixed this, though.
+    to have permanently fixed this, though.
 
     In openstack, the metadata service might be painfully slow, and
     unable to avoid hitting a timeout of even up to 10 seconds or more
@@ -332,7 +374,7 @@ def wait_for_url(urls, max_wait=None, timeout=None,
     Offset those needs with the need to not hang forever (and block boot)
     on a system where cloud-init is configured to look for EC2 Metadata
     service but is not going to find one.  It is possible that the instance
-    data host (169.254.169.254) may be firewalled off Entirely for a sytem,
+    data host (169.254.169.254) may be firewalled off Entirely for a system,
     meaning that the connection will block forever unless a timeout is set.
 
     A value of None for max_wait will retry indefinitely.
@@ -375,8 +417,10 @@ def wait_for_url(urls, max_wait=None, timeout=None,
                 else:
                     headers = {}
 
-                response = readurl(url, headers=headers, timeout=timeout,
-                                   check_status=False)
+                response = readurl(
+                    url, headers=headers, headers_redact=headers_redact,
+                    timeout=timeout, check_status=False,
+                    request_method=request_method)
                 if not response.contents:
                     reason = "empty response [%s]" % (response.code)
                     url_exc = UrlError(ValueError(reason), code=response.code,
@@ -386,7 +430,7 @@ def wait_for_url(urls, max_wait=None, timeout=None,
                     url_exc = UrlError(ValueError(reason), code=response.code,
                                        headers=response.headers, url=url)
                 else:
-                    return url
+                    return url, response.contents
             except UrlError as e:
                 reason = "request error [%s]" % e
                 url_exc = e
@@ -415,7 +459,7 @@ def wait_for_url(urls, max_wait=None, timeout=None,
                   sleep_time)
         time.sleep(sleep_time)
 
-    return False
+    return False, None
 
 
 class OauthUrlHelper(object):
@@ -516,7 +560,7 @@ class OauthUrlHelper(object):
             if extra_exception_cb:
                 ret = extra_exception_cb(msg, exception)
         finally:
-                self.exception_cb(msg, exception)
+            self.exception_cb(msg, exception)
         return ret
 
     def _headers_cb(self, extra_headers_cb, url):
@@ -548,5 +592,19 @@ def oauth_headers(url, consumer_key, token_key, token_secret, consumer_secret,
         timestamp=timestamp)
     _uri, signed_headers, _body = client.sign(url)
     return signed_headers
+
+
+def retry_on_url_exc(msg, exc):
+    """readurl exception_cb that will retry on NOT_FOUND and Timeout.
+
+    Returns False to raise the exception from readurl, True to retry.
+    """
+    if not isinstance(exc, UrlError):
+        return False
+    if exc.code == NOT_FOUND:
+        return True
+    if exc.cause and isinstance(exc.cause, requests.Timeout):
+        return True
+    return False
 
 # vi: ts=4 expandtab

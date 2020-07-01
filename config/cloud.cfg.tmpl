@@ -2,7 +2,7 @@
 # The top level settings are used as module
 # and system configuration.
 
-{% if variant in ["freebsd"] %}
+{% if variant.endswith("bsd") %}
 syslog_fix_perms: root:wheel
 {% elif variant in ["suse"] %}
 syslog_fix_perms: root:root
@@ -21,21 +21,22 @@ disable_root: false
 disable_root: true
 {% endif %}
 
-{% if variant in ["centos", "fedora", "rhel"] %}
+{% if variant in ["amazon", "centos", "fedora", "rhel"] %}
 mount_default_fields: [~, ~, 'auto', 'defaults,nofail', '0', '2']
+{% if variant == "amazon" %}
+resize_rootfs: noblock
+{% endif %}
 resize_rootfs_tmp: /dev
-ssh_deletekeys:   0
-ssh_genkeytypes:  ~
 ssh_pwauth:   0
 
 {% endif %}
 # This will cause the set+update hostname module to not operate (if true)
 preserve_hostname: false
 
-{% if variant in ["freebsd"] %}
+{% if variant.endswith("bsd") %}
 # This should not be required, but leave it in place until the real cause of
-# not beeing able to find -any- datasources is resolved.
-datasource_list: ['ConfigDrive', 'Azure', 'OpenStack', 'Ec2']
+# not finding -any- datasources is resolved.
+datasource_list: ['NoCloud', 'ConfigDrive', 'Azure', 'OpenStack', 'Ec2']
 {% endif %}
 # Example datasource config
 # datasource:
@@ -44,21 +45,32 @@ datasource_list: ['ConfigDrive', 'Azure', 'OpenStack', 'Ec2']
 #      timeout: 5 # (defaults to 50 seconds)
 #      max_wait: 10 # (defaults to 120 seconds)
 
+
+{% if variant == "amazon" %}
+# Amazon Linux relies on ec2-net-utils for network configuration
+network:
+  config: disabled
+{% endif %}
+
 # The modules that run in the 'init' stage
 cloud_init_modules:
  - migrator
+{% if variant not in ["netbsd"] %}
  - seed_random
+{% endif %}
  - bootcmd
  - write-files
+{% if variant not in ["netbsd"] %}
  - growpart
  - resizefs
-{% if variant not in ["freebsd"] %}
+{% endif %}
+{% if variant not in ["freebsd", "netbsd"] %}
  - disk_setup
  - mounts
 {% endif %}
  - set_hostname
  - update_hostname
-{% if variant not in ["freebsd"] %}
+{% if variant not in ["freebsd", "netbsd"] %}
  - update_etc_hosts
  - ca-certs
  - rsyslog
@@ -73,7 +85,6 @@ cloud_config_modules:
 # this can be used by upstart jobs for 'start on cloud-config'.
  - emit_upstart
  - snap
- - snap_config  # DEPRECATED- Drop in version 18.2
 {% endif %}
  - ssh-import-id
  - locale
@@ -93,7 +104,7 @@ cloud_config_modules:
 {% if variant in ["suse"] %}
  - zypper-add-repo
 {% endif %}
-{% if variant not in ["freebsd"] %}
+{% if variant not in ["freebsd", "netbsd"] %}
  - ntp
 {% endif %}
  - timezone
@@ -105,16 +116,16 @@ cloud_config_modules:
 
 # The modules that run in the 'final' stage
 cloud_final_modules:
-{% if variant in ["ubuntu", "unknown", "debian"] %}
- - snappy  # DEPRECATED- Drop in version 18.2
-{% endif %}
  - package-update-upgrade-install
 {% if variant in ["ubuntu", "unknown", "debian"] %}
  - fan
  - landscape
  - lxd
 {% endif %}
-{% if variant not in ["freebsd"] %}
+{% if variant in ["ubuntu", "unknown"] %}
+ - ubuntu-drivers
+{% endif %}
+{% if variant not in ["freebsd", "netbsd"] %}
  - puppet
  - chef
  - mcollective
@@ -136,7 +147,7 @@ cloud_final_modules:
 # (not accessible to handlers/transforms)
 system_info:
    # This will affect which distro class gets used
-{% if variant in ["centos", "debian", "fedora", "rhel", "suse", "ubuntu", "freebsd"] %}
+{% if variant in ["amazon", "arch", "centos", "debian", "fedora", "freebsd", "netbsd", "openbsd", "rhel", "suse", "ubuntu"] %}
    distro: {{ variant }}
 {% else %}
    # Unknown/fallback distro.
@@ -151,6 +162,9 @@ system_info:
      groups: [adm, audio, cdrom, dialout, dip, floppy, lxd, netdev, plugdev, sudo, video]
      sudo: ["ALL=(ALL) NOPASSWD:ALL"]
      shell: /bin/bash
+{# SRU_BLOCKER: do not ship network renderers on Xenial, Bionic or Eoan #}
+   network:
+     renderers: ['netplan', 'eni', 'sysconfig']
    # Automatically discover the best ntp_client
    ntp_client: auto
    # Other config here will be given to the distro class and/or path classes
@@ -169,19 +183,37 @@ system_info:
            - http://%(availability_zone)s.clouds.archive.ubuntu.com/ubuntu/
            - http://%(region)s.clouds.archive.ubuntu.com/ubuntu/
          security: []
-     - arches: [armhf, armel, default]
+     - arches: [arm64, armel, armhf]
+       failsafe:
+         primary: http://ports.ubuntu.com/ubuntu-ports
+         security: http://ports.ubuntu.com/ubuntu-ports
+       search:
+         primary:
+           - http://%(ec2_region)s.ec2.ports.ubuntu.com/ubuntu-ports/
+           - http://%(availability_zone)s.clouds.ports.ubuntu.com/ubuntu-ports/
+           - http://%(region)s.clouds.ports.ubuntu.com/ubuntu-ports/
+         security: []
+     - arches: [default]
        failsafe:
          primary: http://ports.ubuntu.com/ubuntu-ports
          security: http://ports.ubuntu.com/ubuntu-ports
    ssh_svcname: ssh
-{% elif variant in ["centos", "rhel", "fedora", "suse"] %}
+{% elif variant in ["amazon", "arch", "centos", "fedora", "rhel", "suse"] %}
    # Default user name + that default users groups (if added/used)
    default_user:
+{% if variant == "amazon" %}
+     name: ec2-user
+     lock_passwd: True
+     gecos: EC2 Default User
+{% else %}
      name: {{ variant }}
      lock_passwd: True
      gecos: {{ variant }} Cloud User
+{% endif %}
 {% if variant == "suse" %}
      groups: [cdrom, users]
+{% elif variant == "arch" %}
+     groups: [wheel, users]
 {% else %}
      groups: [wheel, adm, systemd-journal]
 {% endif %}
@@ -201,4 +233,24 @@ system_info:
      groups: [wheel]
      sudo: ["ALL=(ALL) NOPASSWD:ALL"]
      shell: /bin/tcsh
+{% elif variant in ["netbsd"] %}
+   default_user:
+     name: netbsd
+     lock_passwd: True
+     gecos: NetBSD
+     groups: [wheel]
+     sudo: ["ALL=(ALL) NOPASSWD:ALL"]
+     shell: /bin/sh
+{% elif variant in ["openbsd"] %}
+   default_user:
+     name: openbsd
+     lock_passwd: True
+     gecos: OpenBSD
+     groups: [wheel]
+     sudo: ["ALL=(ALL) NOPASSWD:ALL"]
+     shell: /bin/ksh
+{% endif %}
+{% if variant in ["freebsd", "netbsd", "openbsd"] %}
+   network:
+      renderers: ['{{ variant }}']
 {% endif %}

@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
 import os
 import json
@@ -65,17 +65,32 @@ output_json = '--json' in sys.argv
 src_version = ci_version.version_string()
 version_long = None
 
-if is_gitdir(_tdir) and which("git"):
+# If we're performing CI for a new release branch (which our tooling creates
+# with an "upstream/" prefix), then we don't want to enforce strict version
+# matching because we know it will fail.
+is_release_branch_ci = (
+    os.environ.get("TRAVIS_PULL_REQUEST_BRANCH", "").startswith("upstream/")
+)
+if is_gitdir(_tdir) and which("git") and not is_release_branch_ci:
     flags = []
     if use_tags:
         flags = ['--tags']
     cmd = ['git', 'describe', '--abbrev=8', '--match=[0-9]*'] + flags
 
-    version = tiny_p(cmd).strip()
+    try:
+        version = tiny_p(cmd).strip()
+    except RuntimeError:
+        version = None
 
-    if not version.startswith(src_version):
+    if version is None or not version.startswith(src_version):
         sys.stderr.write("git describe version (%s) differs from "
                          "cloudinit.version (%s)\n" % (version, src_version))
+        sys.stderr.write(
+            "Please get the latest upstream tags.\n"
+            "As an example, this can be done with the following:\n"
+            "$ git remote add upstream https://git.launchpad.net/cloud-init\n"
+            "$ git fetch upstream --tags\n"
+        )
         sys.exit(1)
 
     version_long = tiny_p(cmd + ["--long"]).strip()
@@ -104,6 +119,7 @@ data = {
     'extra': extra,
     'commit': commit,
     'distance': distance,
+    'is_release_branch_ci': is_release_branch_ci,
 }
 
 if output_json:

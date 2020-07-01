@@ -14,6 +14,7 @@ from cloudinit import handlers
 from cloudinit import log as logging
 from cloudinit import mergers
 from cloudinit import util
+from cloudinit import safeyaml
 
 from cloudinit.settings import (PER_ALWAYS)
 
@@ -42,14 +43,12 @@ DEF_MERGERS = mergers.string_extract_mergers('dict(replace)+list()+str()')
 CLOUD_PREFIX = "#cloud-config"
 JSONP_PREFIX = "#cloud-config-jsonp"
 
-# The file header -> content types this module will handle.
-CC_TYPES = {
-    JSONP_PREFIX: handlers.type_from_starts_with(JSONP_PREFIX),
-    CLOUD_PREFIX: handlers.type_from_starts_with(CLOUD_PREFIX),
-}
-
 
 class CloudConfigPartHandler(handlers.Handler):
+
+    # The content prefixes this handler understands.
+    prefixes = [CLOUD_PREFIX, JSONP_PREFIX]
+
     def __init__(self, paths, **_kwargs):
         handlers.Handler.__init__(self, PER_ALWAYS, version=3)
         self.cloud_buf = None
@@ -57,9 +56,6 @@ class CloudConfigPartHandler(handlers.Handler):
         if 'cloud_config_path' in _kwargs:
             self.cloud_fn = paths.get_ipath(_kwargs["cloud_config_path"])
         self.file_names = []
-
-    def list_types(self):
-        return list(CC_TYPES.values())
 
     def _write_cloud_config(self):
         if not self.cloud_fn:
@@ -80,7 +76,7 @@ class CloudConfigPartHandler(handlers.Handler):
                 '',
             ]
             lines.extend(file_lines)
-            lines.append(util.yaml_dumps(self.cloud_buf))
+            lines.append(safeyaml.dumps(self.cloud_buf))
         else:
             lines = []
         util.write_file(self.cloud_fn, "\n".join(lines), 0o600)
@@ -138,7 +134,7 @@ class CloudConfigPartHandler(handlers.Handler):
             # First time through, merge with an empty dict...
             if self.cloud_buf is None or not self.file_names:
                 self.cloud_buf = {}
-            if ctype == CC_TYPES[JSONP_PREFIX]:
+            if ctype == handlers.INCLUSION_TYPES_MAP[JSONP_PREFIX]:
                 self._merge_patch(payload)
             else:
                 self._merge_part(payload, headers)

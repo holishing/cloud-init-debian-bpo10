@@ -136,6 +136,7 @@ NETWORK_DATA_3 = {
     ]
 }
 
+BOND_MAC = "fa:16:3e:b3:72:36"
 NETWORK_DATA_BOND = {
     "services": [
         {"type": "dns", "address": "1.1.1.191"},
@@ -163,7 +164,7 @@ NETWORK_DATA_BOND = {
         {"bond_links": ["eth0", "eth1"],
          "bond_miimon": 100, "bond_mode": "4",
          "bond_xmit_hash_policy": "layer3+4",
-         "ethernet_mac_address": "0c:c4:7a:34:6e:3c",
+         "ethernet_mac_address": BOND_MAC,
          "id": "bond0", "type": "bond"},
         {"ethernet_mac_address": "fa:16:3e:b3:72:30",
          "id": "vlan2", "type": "vlan", "vlan_id": 602,
@@ -219,11 +220,16 @@ CFG_DRIVE_FILES_V2 = {
     'openstack/2015-10-15/user_data': USER_DATA,
     'openstack/2015-10-15/network_data.json': json.dumps(NETWORK_DATA)}
 
+M_PATH = "cloudinit.sources.DataSourceConfigDrive."
+
 
 class TestConfigDriveDataSource(CiTestCase):
 
     def setUp(self):
         super(TestConfigDriveDataSource, self).setUp()
+        self.add_patch(
+            M_PATH + "util.find_devs_with",
+            "m_find_devs_with", return_value=[])
         self.tmp = self.tmp_dir()
 
     def test_ec2_metadata(self):
@@ -264,8 +270,7 @@ class TestConfigDriveDataSource(CiTestCase):
                 exists_mock = mocks.enter_context(
                     mock.patch.object(os.path, 'exists',
                                       side_effect=exists_side_effect()))
-                device = cfg_ds.device_name_to_device(name)
-                self.assertEqual(dev_name, device)
+                self.assertEqual(dev_name, cfg_ds.device_name_to_device(name))
 
                 find_mock.assert_called_once_with(mock.ANY)
                 self.assertEqual(exists_mock.call_count, 2)
@@ -292,8 +297,7 @@ class TestConfigDriveDataSource(CiTestCase):
                 exists_mock = mocks.enter_context(
                     mock.patch.object(os.path, 'exists',
                                       return_value=True))
-                device = cfg_ds.device_name_to_device(name)
-                self.assertEqual(dev_name, device)
+                self.assertEqual(dev_name, cfg_ds.device_name_to_device(name))
 
                 find_mock.assert_called_once_with(mock.ANY)
                 exists_mock.assert_called_once_with(mock.ANY)
@@ -327,8 +331,7 @@ class TestConfigDriveDataSource(CiTestCase):
                 yield True
             with mock.patch.object(os.path, 'exists',
                                    side_effect=exists_side_effect()):
-                device = cfg_ds.device_name_to_device(name)
-                self.assertEqual(dev_name, device)
+                self.assertEqual(dev_name, cfg_ds.device_name_to_device(name))
                 # We don't assert the call count for os.path.exists() because
                 # not all of the entries in name_tests results in two calls to
                 # that function.  Specifically, 'root2k' doesn't seem to call
@@ -355,8 +358,7 @@ class TestConfigDriveDataSource(CiTestCase):
         }
         for name, dev_name in name_tests.items():
             with mock.patch.object(os.path, 'exists', return_value=True):
-                device = cfg_ds.device_name_to_device(name)
-                self.assertEqual(dev_name, device)
+                self.assertEqual(dev_name, cfg_ds.device_name_to_device(name))
 
     def test_dir_valid(self):
         """Verify a dir is read as such."""
@@ -468,12 +470,28 @@ class TestConfigDriveDataSource(CiTestCase):
             util.find_devs_with = orig_find_devs_with
             util.is_partition = orig_is_partition
 
-    @mock.patch('cloudinit.sources.DataSourceConfigDrive.on_first_boot')
+    @mock.patch(M_PATH + 'on_first_boot')
     def test_pubkeys_v2(self, on_first_boot):
         """Verify that public-keys work in config-drive-v2."""
         myds = cfg_ds_from_dir(self.tmp, files=CFG_DRIVE_FILES_V2)
         self.assertEqual(myds.get_public_ssh_keys(),
                          [OSTACK_META['public_keys']['mykey']])
+        self.assertEqual('configdrive', myds.cloud_name)
+        self.assertEqual('openstack', myds.platform)
+        self.assertEqual('seed-dir (%s/seed)' % self.tmp, myds.subplatform)
+
+    def test_subplatform_config_drive_when_starts_with_dev(self):
+        """subplatform reports config-drive when source starts with /dev/."""
+        cfg_ds = ds.DataSourceConfigDrive(settings.CFG_BUILTIN,
+                                          None,
+                                          helpers.Paths({}))
+        with mock.patch(M_PATH + 'find_candidate_devs') as m_find_devs:
+            with mock.patch(M_PATH + 'util.is_FreeBSD', return_value=False):
+                with mock.patch(M_PATH + 'util.mount_cb'):
+                    with mock.patch(M_PATH + 'on_first_boot'):
+                        m_find_devs.return_value = ['/dev/anything']
+                        self.assertEqual(True, cfg_ds.get_data())
+        self.assertEqual('config-disk (/dev/anything)', cfg_ds.subplatform)
 
 
 class TestNetJson(CiTestCase):
@@ -482,19 +500,59 @@ class TestNetJson(CiTestCase):
         self.tmp = self.tmp_dir()
         self.maxDiff = None
 
-    @mock.patch('cloudinit.sources.DataSourceConfigDrive.on_first_boot')
+    @mock.patch(M_PATH + 'on_first_boot')
     def test_network_data_is_found(self, on_first_boot):
         """Verify that network_data is present in ds in config-drive-v2."""
         myds = cfg_ds_from_dir(self.tmp, files=CFG_DRIVE_FILES_V2)
         self.assertIsNotNone(myds.network_json)
 
-    @mock.patch('cloudinit.sources.DataSourceConfigDrive.on_first_boot')
+    @mock.patch(M_PATH + 'on_first_boot')
     def test_network_config_is_converted(self, on_first_boot):
         """Verify that network_data is converted and present on ds object."""
         myds = cfg_ds_from_dir(self.tmp, files=CFG_DRIVE_FILES_V2)
         network_config = openstack.convert_net_json(NETWORK_DATA,
                                                     known_macs=KNOWN_MACS)
         self.assertEqual(myds.network_config, network_config)
+
+    def test_network_config_conversion_dhcp6(self):
+        """Test some ipv6 input network json and check the expected
+           conversions."""
+        in_data = {
+            'links': [
+                {'vif_id': '2ecc7709-b3f7-4448-9580-e1ec32d75bbd',
+                 'ethernet_mac_address': 'fa:16:3e:69:b0:58',
+                 'type': 'ovs', 'mtu': None, 'id': 'tap2ecc7709-b3'},
+                {'vif_id': '2f88d109-5b57-40e6-af32-2472df09dc33',
+                 'ethernet_mac_address': 'fa:16:3e:d4:57:ad',
+                 'type': 'ovs', 'mtu': None, 'id': 'tap2f88d109-5b'},
+            ],
+            'networks': [
+                {'link': 'tap2ecc7709-b3', 'type': 'ipv6_dhcpv6-stateless',
+                 'network_id': '6d6357ac-0f70-4afa-8bd7-c274cc4ea235',
+                 'id': 'network0'},
+                {'link': 'tap2f88d109-5b', 'type': 'ipv6_dhcpv6-stateful',
+                 'network_id': 'd227a9b3-6960-4d94-8976-ee5788b44f54',
+                 'id': 'network1'},
+            ]
+        }
+        out_data = {
+            'version': 1,
+            'config': [
+                {'mac_address': 'fa:16:3e:69:b0:58',
+                 'mtu': None,
+                 'name': 'enp0s1',
+                 'subnets': [{'type': 'ipv6_dhcpv6-stateless'}],
+                 'type': 'physical'},
+                {'mac_address': 'fa:16:3e:d4:57:ad',
+                 'mtu': None,
+                 'name': 'enp0s2',
+                 'subnets': [{'type': 'ipv6_dhcpv6-stateful'}],
+                 'type': 'physical',
+                 'accept-ra': True}
+            ],
+        }
+        conv_data = openstack.convert_net_json(in_data, known_macs=KNOWN_MACS)
+        self.assertEqual(out_data, conv_data)
 
     def test_network_config_conversions(self):
         """Tests a bunch of input network json and checks the
@@ -597,6 +655,9 @@ class TestNetJson(CiTestCase):
 
 
 class TestConvertNetworkData(CiTestCase):
+
+    with_logs = True
+
     def setUp(self):
         super(TestConvertNetworkData, self).setUp()
         self.tmp = self.tmp_dir()
@@ -642,7 +703,7 @@ class TestConvertNetworkData(CiTestCase):
             routes)
         eni_renderer = eni.Renderer()
         eni_renderer.render_network_state(
-            network_state.parse_net_config_data(ncfg), self.tmp)
+            network_state.parse_net_config_data(ncfg), target=self.tmp)
         with open(os.path.join(self.tmp, "etc",
                                "network", "interfaces"), 'r') as f:
             eni_rendering = f.read()
@@ -664,7 +725,7 @@ class TestConvertNetworkData(CiTestCase):
         eni_renderer = eni.Renderer()
 
         eni_renderer.render_network_state(
-            network_state.parse_net_config_data(ncfg), self.tmp)
+            network_state.parse_net_config_data(ncfg), target=self.tmp)
         with open(os.path.join(self.tmp, "etc",
                                "network", "interfaces"), 'r') as f:
             eni_rendering = f.read()
@@ -688,6 +749,9 @@ class TestConvertNetworkData(CiTestCase):
         self.assertIn("auto oeth0", eni_rendering)
         self.assertIn("auto oeth1", eni_rendering)
         self.assertIn("auto bond0", eni_rendering)
+        # The bond should have the given mac address
+        pos = eni_rendering.find("auto bond0")
+        self.assertIn(BOND_MAC, eni_rendering[pos:])
 
     def test_vlan(self):
         # light testing of vlan config conversion and eni rendering
@@ -695,7 +759,7 @@ class TestConvertNetworkData(CiTestCase):
                                           known_macs=KNOWN_MACS)
         eni_renderer = eni.Renderer()
         eni_renderer.render_network_state(
-            network_state.parse_net_config_data(ncfg), self.tmp)
+            network_state.parse_net_config_data(ncfg), target=self.tmp)
         with open(os.path.join(self.tmp, "etc",
                                "network", "interfaces"), 'r') as f:
             eni_rendering = f.read()
@@ -719,6 +783,26 @@ class TestConvertNetworkData(CiTestCase):
         expected = {'nic0': 'fa:16:3e:05:30:fe', 'enp0s1': 'fa:16:3e:69:b0:58',
                     'enp0s2': 'fa:16:3e:d4:57:ad'}
         self.assertEqual(expected, config_name2mac)
+
+    def test_unknown_device_types_accepted(self):
+        # If we don't recognise a link, we should treat it as physical for a
+        # best-effort boot
+        my_netdata = deepcopy(NETWORK_DATA)
+        my_netdata['links'][0]['type'] = 'my-special-link-type'
+
+        ncfg = openstack.convert_net_json(my_netdata, known_macs=KNOWN_MACS)
+        config_name2mac = {}
+        for n in ncfg['config']:
+            if n['type'] == 'physical':
+                config_name2mac[n['name']] = n['mac_address']
+
+        expected = {'nic0': 'fa:16:3e:05:30:fe', 'enp0s1': 'fa:16:3e:69:b0:58',
+                    'enp0s2': 'fa:16:3e:d4:57:ad'}
+        self.assertEqual(expected, config_name2mac)
+
+        # We should, however, warn the user that we don't recognise the type
+        self.assertIn('Unknown network_data link type (my-special-link-type)',
+                      self.logs.getvalue())
 
 
 def cfg_ds_from_dir(base_d, files=None):

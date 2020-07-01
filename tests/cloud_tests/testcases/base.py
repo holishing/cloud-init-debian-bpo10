@@ -31,6 +31,11 @@ class CloudTestCase(unittest.TestCase):
     def is_distro(self, distro_name):
         return self.os_cfg['os'] == distro_name
 
+    @classmethod
+    def maybeSkipTest(cls):
+        """Present to allow subclasses to override and raise a skipTest."""
+        pass
+
     def assertPackageInstalled(self, name, version=None):
         """Check dpkg-query --show output for matching package name.
 
@@ -167,8 +172,7 @@ class CloudTestCase(unittest.TestCase):
                 'Skipping instance-data.json test.'
                 ' OS: %s not bionic or newer' % self.os_name)
         instance_data = json.loads(out)
-        self.assertEqual(
-            ['ds/user-data'], instance_data['base64-encoded-keys'])
+        self.assertCountEqual(['merged_cfg'], instance_data['sensitive_keys'])
         ds = instance_data.get('ds', {})
         v1_data = instance_data.get('v1', {})
         metadata = ds.get('meta-data', {})
@@ -187,11 +191,31 @@ class CloudTestCase(unittest.TestCase):
             metadata.get('placement', {}).get('availability-zone'),
             'Could not determine EC2 Availability zone placement')
         self.assertIsNotNone(
-            v1_data['availability-zone'], 'expected ec2 availability-zone')
-        self.assertEqual('aws', v1_data['cloud-name'])
-        self.assertIn('i-', v1_data['instance-id'])
-        self.assertIn('ip-', v1_data['local-hostname'])
+            v1_data['availability_zone'], 'expected ec2 availability_zone')
+        self.assertEqual('aws', v1_data['cloud_name'])
+        self.assertEqual('ec2', v1_data['platform'])
+        self.assertEqual(
+            'metadata (http://169.254.169.254)', v1_data['subplatform'])
+        self.assertIn('i-', v1_data['instance_id'])
+        self.assertIn('ip-', v1_data['local_hostname'])
         self.assertIsNotNone(v1_data['region'], 'expected ec2 region')
+        self.assertIsNotNone(
+            re.match(r'\d\.\d+\.\d+-\d+-aws', v1_data['kernel_release']))
+        self.assertEqual(
+            'redacted for non-root user', instance_data['merged_cfg'])
+        self.assertEqual(self.os_cfg['os'], v1_data['variant'])
+        self.assertEqual(self.os_cfg['os'], v1_data['distro'])
+        self.assertEqual(
+            self.os_cfg['os'], instance_data["sys_info"]['dist'][0],
+            "Unexpected sys_info dist value")
+        self.assertEqual(self.os_name, v1_data['distro_release'])
+        self.assertEqual(
+            str(self.os_cfg['version']), v1_data['distro_version'])
+        self.assertEqual('x86_64', v1_data['machine'])
+        self.assertIsNotNone(
+            re.match(r'3.\d\.\d', v1_data['python_version']),
+            "unexpected python version: {ver}".format(
+                ver=v1_data["python_version"]))
 
     def test_instance_data_json_lxd(self):
         """Validate instance-data.json content by lxd platform.
@@ -213,19 +237,38 @@ class CloudTestCase(unittest.TestCase):
                 ' OS: %s not bionic or newer' % self.os_name)
         instance_data = json.loads(out)
         v1_data = instance_data.get('v1', {})
+        self.assertCountEqual([], sorted(instance_data['base64_encoded_keys']))
+        self.assertEqual('unknown', v1_data['cloud_name'])
+        self.assertEqual('lxd', v1_data['platform'])
         self.assertEqual(
-            ['ds/user-data', 'ds/vendor-data'],
-            sorted(instance_data['base64-encoded-keys']))
-        self.assertEqual('nocloud', v1_data['cloud-name'])
+            'seed-dir (/var/lib/cloud/seed/nocloud-net)',
+            v1_data['subplatform'])
         self.assertIsNone(
-            v1_data['availability-zone'],
-            'found unexpected lxd availability-zone %s' %
-            v1_data['availability-zone'])
-        self.assertIn('cloud-test', v1_data['instance-id'])
-        self.assertIn('cloud-test', v1_data['local-hostname'])
+            v1_data['availability_zone'],
+            'found unexpected lxd availability_zone %s' %
+            v1_data['availability_zone'])
+        self.assertIn('cloud-test', v1_data['instance_id'])
+        self.assertIn('cloud-test', v1_data['local_hostname'])
         self.assertIsNone(
             v1_data['region'],
             'found unexpected lxd region %s' % v1_data['region'])
+        self.assertIsNotNone(
+            re.match(r'\d\.\d+\.\d+-\d+', v1_data['kernel_release']))
+        self.assertEqual(
+            'redacted for non-root user', instance_data['merged_cfg'])
+        self.assertEqual(self.os_cfg['os'], v1_data['variant'])
+        self.assertEqual(self.os_cfg['os'], v1_data['distro'])
+        self.assertEqual(
+            self.os_cfg['os'], instance_data["sys_info"]['dist'][0],
+            "Unexpected sys_info dist value")
+        self.assertEqual(self.os_name, v1_data['distro_release'])
+        self.assertEqual(
+            str(self.os_cfg['version']), v1_data['distro_version'])
+        self.assertEqual('x86_64', v1_data['machine'])
+        self.assertIsNotNone(
+            re.match(r'3.\d\.\d', v1_data['python_version']),
+            "unexpected python version: {ver}".format(
+                ver=v1_data["python_version"]))
 
     def test_instance_data_json_kvm(self):
         """Validate instance-data.json content by nocloud-kvm platform.
@@ -248,21 +291,42 @@ class CloudTestCase(unittest.TestCase):
                 ' OS: %s not bionic or newer' % self.os_name)
         instance_data = json.loads(out)
         v1_data = instance_data.get('v1', {})
-        self.assertEqual(
-            ['ds/user-data'], instance_data['base64-encoded-keys'])
-        self.assertEqual('nocloud', v1_data['cloud-name'])
+        self.assertCountEqual([], instance_data['base64_encoded_keys'])
+        self.assertEqual('unknown', v1_data['cloud_name'])
+        self.assertEqual('nocloud', v1_data['platform'])
+        subplatform = v1_data['subplatform']
+        self.assertIsNotNone(
+            re.match(r'config-disk \(\/dev\/[a-z]{3}\)', subplatform),
+            'kvm subplatform "%s" != "config-disk (/dev/...)"' % subplatform)
         self.assertIsNone(
-            v1_data['availability-zone'],
-            'found unexpected kvm availability-zone %s' %
-            v1_data['availability-zone'])
+            v1_data['availability_zone'],
+            'found unexpected kvm availability_zone %s' %
+            v1_data['availability_zone'])
         self.assertIsNotNone(
             re.match(r'[\da-f]{8}(-[\da-f]{4}){3}-[\da-f]{12}',
-                     v1_data['instance-id']),
-            'kvm instance-id is not a UUID: %s' % v1_data['instance-id'])
-        self.assertIn('ubuntu', v1_data['local-hostname'])
+                     v1_data['instance_id']),
+            'kvm instance_id is not a UUID: %s' % v1_data['instance_id'])
+        self.assertIn('ubuntu', v1_data['local_hostname'])
         self.assertIsNone(
             v1_data['region'],
             'found unexpected lxd region %s' % v1_data['region'])
+        self.assertIsNotNone(
+            re.match(r'\d\.\d+\.\d+-\d+', v1_data['kernel_release']))
+        self.assertEqual(
+            'redacted for non-root user', instance_data['merged_cfg'])
+        self.assertEqual(self.os_cfg['os'], v1_data['variant'])
+        self.assertEqual(self.os_cfg['os'], v1_data['distro'])
+        self.assertEqual(
+            self.os_cfg['os'], instance_data["sys_info"]['dist'][0],
+            "Unexpected sys_info dist value")
+        self.assertEqual(self.os_name, v1_data['distro_release'])
+        self.assertEqual(
+                str(self.os_cfg['version']), v1_data['distro_version'])
+        self.assertEqual('x86_64', v1_data['machine'])
+        self.assertIsNotNone(
+            re.match(r'3.\d\.\d', v1_data['python_version']),
+            "unexpected python version: {ver}".format(
+                ver=v1_data["python_version"]))
 
 
 class PasswordListTest(CloudTestCase):

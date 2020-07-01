@@ -3,11 +3,12 @@
 from collections import namedtuple
 import copy
 import os
-from six import StringIO
+from io import StringIO
 
 from cloudinit.cmd import main
+from cloudinit import safeyaml
 from cloudinit.util import (
-    ensure_dir, load_file, write_file, yaml_dumps)
+    ensure_dir, load_file, write_file)
 from cloudinit.tests.helpers import (
     FilesystemMockingTestCase, wrap_and_call)
 
@@ -16,8 +17,6 @@ myargs = namedtuple('MyArgs', 'debug files force local reporter subcommand')
 
 
 class TestMain(FilesystemMockingTestCase):
-
-    with_logs = True
 
     def setUp(self):
         super(TestMain, self).setUp()
@@ -39,7 +38,7 @@ class TestMain(FilesystemMockingTestCase):
             ],
             'cloud_init_modules': ['write-files', 'runcmd'],
         }
-        cloud_cfg = yaml_dumps(self.cfg)
+        cloud_cfg = safeyaml.dumps(self.cfg)
         ensure_dir(os.path.join(self.new_root, 'etc', 'cloud'))
         self.cloud_cfg_file = os.path.join(
             self.new_root, 'etc', 'cloud', 'cloud.cfg')
@@ -113,7 +112,7 @@ class TestMain(FilesystemMockingTestCase):
         """When local-hostname metadata is present, call cc_set_hostname."""
         self.cfg['datasource'] = {
             'None': {'metadata': {'local-hostname': 'md-hostname'}}}
-        cloud_cfg = yaml_dumps(self.cfg)
+        cloud_cfg = safeyaml.dumps(self.cfg)
         write_file(self.cloud_cfg_file, cloud_cfg)
         cmdargs = myargs(
             debug=False, files=None, force=False, local=False, reporter=None,
@@ -125,7 +124,9 @@ class TestMain(FilesystemMockingTestCase):
             updated_cfg.update(
                 {'def_log_file': '/var/log/cloud-init.log',
                  'log_cfgs': [],
-                 'syslog_fix_perms': ['syslog:adm', 'root:adm', 'root:wheel'],
+                 'syslog_fix_perms': [
+                     'syslog:adm', 'root:adm', 'root:wheel', 'root:root'
+                 ],
                  'vendor_data': {'enabled': True, 'prefix': []}})
             updated_cfg.pop('system_info')
 

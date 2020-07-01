@@ -19,6 +19,7 @@ from cloudinit import sources
 from cloudinit import url_helper as uhelp
 from cloudinit import util
 from cloudinit import warnings
+from cloudinit.event import EventType
 
 LOG = logging.getLogger(__name__)
 
@@ -27,19 +28,25 @@ SKIP_METADATA_URL_CODES = frozenset([uhelp.NOT_FOUND])
 STRICT_ID_PATH = ("datasource", "Ec2", "strict_id")
 STRICT_ID_DEFAULT = "warn"
 
+API_TOKEN_ROUTE = 'latest/api/token'
+AWS_TOKEN_TTL_SECONDS = '21600'
+AWS_TOKEN_PUT_HEADER = 'X-aws-ec2-metadata-token'
+AWS_TOKEN_REQ_HEADER = AWS_TOKEN_PUT_HEADER + '-ttl-seconds'
+AWS_TOKEN_REDACT = [AWS_TOKEN_PUT_HEADER, AWS_TOKEN_REQ_HEADER]
 
-class Platforms(object):
-    # TODO Rename and move to cloudinit.cloud.CloudNames
-    ALIYUN = "AliYun"
-    AWS = "AWS"
-    BRIGHTBOX = "Brightbox"
-    SEEDED = "Seeded"
+
+class CloudNames(object):
+    ALIYUN = "aliyun"
+    AWS = "aws"
+    BRIGHTBOX = "brightbox"
+    ZSTACK = "zstack"
+    E24CLOUD = "e24cloud"
     # UNKNOWN indicates no positive id.  If strict_id is 'warn' or 'false',
     # then an attempt at the Ec2 Metadata service will be made.
-    UNKNOWN = "Unknown"
+    UNKNOWN = "unknown"
     # NO_EC2_METADATA indicates this platform does not have a Ec2 metadata
     # service available. No attempt at the Ec2 Metadata service will be made.
-    NO_EC2_METADATA = "No-EC2-Metadata"
+    NO_EC2_METADATA = "no-ec2-metadata"
 
 
 class DataSourceEc2(sources.DataSource):
@@ -55,14 +62,13 @@ class DataSourceEc2(sources.DataSource):
 
     # Priority ordered list of additional metadata versions which will be tried
     # for extended metadata content. IPv6 support comes in 2016-09-02
-    extended_metadata_versions = ['2016-09-02']
+    extended_metadata_versions = ['2018-09-24', '2016-09-02']
 
     # Setup read_url parameters per get_url_params.
     url_max_wait = 120
     url_timeout = 50
 
-    _cloud_platform = None
-
+    _api_token = None  # API token for accessing the metadata service
     _network_config = sources.UNSET  # Used to cache calculated network cfg v1
 
     # Whether we want to get network configuration from the metadata service.
@@ -71,30 +77,21 @@ class DataSourceEc2(sources.DataSource):
     def __init__(self, sys_cfg, distro, paths):
         super(DataSourceEc2, self).__init__(sys_cfg, distro, paths)
         self.metadata_address = None
-        self.seed_dir = os.path.join(paths.seed_dir, "ec2")
 
     def _get_cloud_name(self):
         """Return the cloud name as identified during _get_data."""
-        return self.cloud_platform
+        return identify_platform()
 
     def _get_data(self):
-        seed_ret = {}
-        if util.read_optional_seed(seed_ret, base=(self.seed_dir + "/")):
-            self.userdata_raw = seed_ret['user-data']
-            self.metadata = seed_ret['meta-data']
-            LOG.debug("Using seeded ec2 data from %s", self.seed_dir)
-            self._cloud_platform = Platforms.SEEDED
-            return True
-
         strict_mode, _sleep = read_strict_mode(
             util.get_cfg_by_path(self.sys_cfg, STRICT_ID_PATH,
                                  STRICT_ID_DEFAULT), ("warn", None))
 
-        LOG.debug("strict_mode: %s, cloud_platform=%s",
-                  strict_mode, self.cloud_platform)
-        if strict_mode == "true" and self.cloud_platform == Platforms.UNKNOWN:
+        LOG.debug("strict_mode: %s, cloud_name=%s cloud_platform=%s",
+                  strict_mode, self.cloud_name, self.platform)
+        if strict_mode == "true" and self.cloud_name == CloudNames.UNKNOWN:
             return False
-        elif self.cloud_platform == Platforms.NO_EC2_METADATA:
+        elif self.cloud_name == CloudNames.NO_EC2_METADATA:
             return False
 
         if self.perform_dhcp_setup:  # Setup networking in init-local stage.
@@ -103,19 +100,50 @@ class DataSourceEc2(sources.DataSource):
                 return False
             try:
                 with EphemeralDHCPv4(self.fallback_interface):
-                    return util.log_time(
+                    self._crawled_metadata = util.log_time(
                         logfunc=LOG.debug, msg='Crawl of metadata service',
-                        func=self._crawl_metadata)
+                        func=self.crawl_metadata)
             except NoDHCPLeaseError:
                 return False
         else:
-            return self._crawl_metadata()
+            self._crawled_metadata = util.log_time(
+                logfunc=LOG.debug, msg='Crawl of metadata service',
+                func=self.crawl_metadata)
+        if not self._crawled_metadata:
+            return False
+        self.metadata = self._crawled_metadata.get('meta-data', None)
+        self.userdata_raw = self._crawled_metadata.get('user-data', None)
+        self.identity = self._crawled_metadata.get(
+            'dynamic', {}).get('instance-identity', {}).get('document', {})
+        return True
+
+    def is_classic_instance(self):
+        """Report if this instance type is Ec2 Classic (non-vpc)."""
+        if not self.metadata:
+            # Can return False on inconclusive as we are also called in
+            # network_config where metadata will be present.
+            # Secondary call site is in packaging postinst script.
+            return False
+        ifaces_md = self.metadata.get('network', {}).get('interfaces', {})
+        for _mac, mac_data in ifaces_md.get('macs', {}).items():
+            if 'vpc-id' in mac_data:
+                return False
+        return True
 
     @property
     def launch_index(self):
         if not self.metadata:
             return None
         return self.metadata.get('ami-launch-index')
+
+    @property
+    def platform(self):
+        # Handle upgrade path of pickled ds
+        if not hasattr(self, '_platform_type'):
+            self._platform_type = DataSourceEc2.dsname.lower()
+        if not self._platform_type:
+            self._platform_type = DataSourceEc2.dsname.lower()
+        return self._platform_type
 
     def get_metadata_api_version(self):
         """Get the best supported api version from the metadata service.
@@ -127,11 +155,13 @@ class DataSourceEc2(sources.DataSource):
         min_metadata_version.
         """
         # Assumes metadata service is already up
+        url_tmpl = '{0}/{1}/meta-data/instance-id'
+        headers = self._get_headers()
         for api_ver in self.extended_metadata_versions:
-            url = '{0}/{1}/meta-data/instance-id'.format(
-                self.metadata_address, api_ver)
+            url = url_tmpl.format(self.metadata_address, api_ver)
             try:
-                resp = uhelp.readurl(url=url)
+                resp = uhelp.readurl(url=url, headers=headers,
+                                     headers_redact=AWS_TOKEN_REDACT)
             except uhelp.UrlError as e:
                 LOG.debug('url %s raised exception %s', url, e)
             else:
@@ -144,18 +174,68 @@ class DataSourceEc2(sources.DataSource):
         return self.min_metadata_version
 
     def get_instance_id(self):
-        if self.cloud_platform == Platforms.AWS:
+        if self.cloud_name == CloudNames.AWS:
             # Prefer the ID from the instance identity document, but fall back
             if not getattr(self, 'identity', None):
                 # If re-using cached datasource, it's get_data run didn't
                 # setup self.identity. So we need to do that now.
                 api_version = self.get_metadata_api_version()
                 self.identity = ec2.get_instance_identity(
-                    api_version, self.metadata_address).get('document', {})
+                    api_version, self.metadata_address,
+                    headers_cb=self._get_headers,
+                    headers_redact=AWS_TOKEN_REDACT,
+                    exception_cb=self._refresh_stale_aws_token_cb).get(
+                        'document', {})
             return self.identity.get(
                 'instanceId', self.metadata['instance-id'])
         else:
             return self.metadata['instance-id']
+
+    def _maybe_fetch_api_token(self, mdurls, timeout=None, max_wait=None):
+        """ Get an API token for EC2 Instance Metadata Service.
+
+        On EC2. IMDS will always answer an API token, unless
+        the instance owner has disabled the IMDS HTTP endpoint or
+        the network topology conflicts with the configured hop-limit.
+        """
+        if self.cloud_name != CloudNames.AWS:
+            return
+
+        urls = []
+        url2base = {}
+        url_path = API_TOKEN_ROUTE
+        request_method = 'PUT'
+        for url in mdurls:
+            cur = '{0}/{1}'.format(url, url_path)
+            urls.append(cur)
+            url2base[cur] = url
+
+        # use the self._imds_exception_cb to check for Read errors
+        LOG.debug('Fetching Ec2 IMDSv2 API Token')
+
+        response = None
+        url = None
+        url_params = self.get_url_params()
+        try:
+            url, response = uhelp.wait_for_url(
+                urls=urls, max_wait=url_params.max_wait_seconds,
+                timeout=url_params.timeout_seconds, status_cb=LOG.warning,
+                headers_cb=self._get_headers,
+                exception_cb=self._imds_exception_cb,
+                request_method=request_method,
+                headers_redact=AWS_TOKEN_REDACT)
+        except uhelp.UrlError:
+            # We use the raised exception to interupt the retry loop.
+            # Nothing else to do here.
+            pass
+
+        if url and response:
+            self._api_token = response
+            return url2base[url]
+
+        # If we get here, then wait_for_url timed out, waiting for IMDS
+        # or the IMDS HTTP endpoint is disabled
+        return None
 
     def wait_for_metadata_service(self):
         mcfg = self.ds_cfg
@@ -178,27 +258,44 @@ class DataSourceEc2(sources.DataSource):
             LOG.warning("Empty metadata url list! using default list")
             mdurls = self.metadata_urls
 
-        urls = []
-        url2base = {}
-        for url in mdurls:
-            cur = '{0}/{1}/meta-data/instance-id'.format(
-                url, self.min_metadata_version)
-            urls.append(cur)
-            url2base[cur] = url
+        # try the api token path first
+        metadata_address = self._maybe_fetch_api_token(mdurls)
+        # When running on EC2, we always access IMDS with an API token.
+        # If we could not get an API token, then we assume the IMDS
+        # endpoint was disabled and we move on without a data source.
+        # Fallback to IMDSv1 if not running on EC2
+        if not metadata_address and self.cloud_name != CloudNames.AWS:
+            # if we can't get a token, use instance-id path
+            urls = []
+            url2base = {}
+            url_path = '{ver}/meta-data/instance-id'.format(
+                ver=self.min_metadata_version)
+            request_method = 'GET'
+            for url in mdurls:
+                cur = '{0}/{1}'.format(url, url_path)
+                urls.append(cur)
+                url2base[cur] = url
 
-        start_time = time.time()
-        url = uhelp.wait_for_url(
-            urls=urls, max_wait=url_params.max_wait_seconds,
-            timeout=url_params.timeout_seconds, status_cb=LOG.warn)
+            start_time = time.time()
+            url, _ = uhelp.wait_for_url(
+                urls=urls, max_wait=url_params.max_wait_seconds,
+                timeout=url_params.timeout_seconds, status_cb=LOG.warning,
+                headers_redact=AWS_TOKEN_REDACT, headers_cb=self._get_headers,
+                request_method=request_method)
 
-        if url:
-            self.metadata_address = url2base[url]
+            if url:
+                metadata_address = url2base[url]
+
+        if metadata_address:
+            self.metadata_address = metadata_address
             LOG.debug("Using metadata source: '%s'", self.metadata_address)
+        elif self.cloud_name == CloudNames.AWS:
+            LOG.warning("IMDS's HTTP endpoint is probably disabled")
         else:
             LOG.critical("Giving up on md from %s after %s seconds",
                          urls, int(time.time() - start_time))
 
-        return bool(url)
+        return bool(metadata_address)
 
     def device_name_to_device(self, name):
         # Consult metadata service, that has
@@ -254,7 +351,7 @@ class DataSourceEc2(sources.DataSource):
     @property
     def availability_zone(self):
         try:
-            if self.cloud_platform == Platforms.AWS:
+            if self.cloud_name == CloudNames.AWS:
                 return self.identity.get(
                     'availabilityZone',
                     self.metadata['placement']['availability-zone'])
@@ -265,7 +362,7 @@ class DataSourceEc2(sources.DataSource):
 
     @property
     def region(self):
-        if self.cloud_platform == Platforms.AWS:
+        if self.cloud_name == CloudNames.AWS:
             region = self.identity.get('region')
             # Fallback to trimming the availability zone if region is missing
             if self.availability_zone and not region:
@@ -277,16 +374,10 @@ class DataSourceEc2(sources.DataSource):
                 return az[:-1]
         return None
 
-    @property
-    def cloud_platform(self):  # TODO rename cloud_name
-        if self._cloud_platform is None:
-            self._cloud_platform = identify_platform()
-        return self._cloud_platform
-
     def activate(self, cfg, is_new_instance):
         if not is_new_instance:
             return
-        if self.cloud_platform == Platforms.UNKNOWN:
+        if self.cloud_name == CloudNames.UNKNOWN:
             warn_if_necessary(
                 util.get_cfg_by_path(cfg, STRICT_ID_PATH, STRICT_ID_DEFAULT),
                 cfg)
@@ -306,21 +397,35 @@ class DataSourceEc2(sources.DataSource):
         result = None
         no_network_metadata_on_aws = bool(
             'network' not in self.metadata and
-            self.cloud_platform == Platforms.AWS)
+            self.cloud_name == CloudNames.AWS)
         if no_network_metadata_on_aws:
             LOG.debug("Metadata 'network' not present:"
                       " Refreshing stale metadata from prior to upgrade.")
             util.log_time(
                 logfunc=LOG.debug, msg='Re-crawl of metadata service',
-                func=self._crawl_metadata)
+                func=self.get_data)
 
-        # Limit network configuration to only the primary/fallback nic
         iface = self.fallback_interface
-        macs_to_nics = {net.get_interface_mac(iface): iface}
         net_md = self.metadata.get('network')
         if isinstance(net_md, dict):
+            # SRU_BLOCKER: xenial, bionic and eoan should default
+            # apply_full_imds_network_config to False to retain original
+            # behavior on those releases.
             result = convert_ec2_metadata_network_config(
-                net_md, macs_to_nics=macs_to_nics, fallback_nic=iface)
+                net_md, fallback_nic=iface,
+                full_network_config=util.get_cfg_option_bool(
+                    self.ds_cfg, 'apply_full_imds_network_config', True))
+
+            # RELEASE_BLOCKER: xenial should drop the below if statement,
+            # because the issue being addressed doesn't exist pre-netplan.
+            # (This datasource doesn't implement check_instance_id() so the
+            # datasource object is recreated every boot; this means we don't
+            # need to modify update_events on cloud-init upgrade.)
+
+            # Non-VPC (aka Classic) Ec2 instances need to rewrite the
+            # network config file every boot due to MAC address change.
+            if self.is_classic_instance():
+                self.update_events['network'].add(EventType.BOOT)
         else:
             LOG.warning("Metadata 'network' key not valid: %s.", net_md)
         self._network_config = result
@@ -340,28 +445,128 @@ class DataSourceEc2(sources.DataSource):
                 return super(DataSourceEc2, self).fallback_interface
         return self._fallback_interface
 
-    def _crawl_metadata(self):
+    def crawl_metadata(self):
         """Crawl metadata service when available.
 
-        @returns: True on success, False otherwise.
+        @returns: Dictionary of crawled metadata content containing the keys:
+          meta-data, user-data and dynamic.
         """
         if not self.wait_for_metadata_service():
-            return False
+            return {}
         api_version = self.get_metadata_api_version()
+        redact = AWS_TOKEN_REDACT
+        crawled_metadata = {}
+        if self.cloud_name == CloudNames.AWS:
+            exc_cb = self._refresh_stale_aws_token_cb
+            exc_cb_ud = self._skip_or_refresh_stale_aws_token_cb
+        else:
+            exc_cb = exc_cb_ud = None
         try:
-            self.userdata_raw = ec2.get_instance_userdata(
-                api_version, self.metadata_address)
-            self.metadata = ec2.get_instance_metadata(
-                api_version, self.metadata_address)
-            if self.cloud_platform == Platforms.AWS:
-                self.identity = ec2.get_instance_identity(
-                    api_version, self.metadata_address).get('document', {})
+            crawled_metadata['user-data'] = ec2.get_instance_userdata(
+                api_version, self.metadata_address,
+                headers_cb=self._get_headers, headers_redact=redact,
+                exception_cb=exc_cb_ud)
+            crawled_metadata['meta-data'] = ec2.get_instance_metadata(
+                api_version, self.metadata_address,
+                headers_cb=self._get_headers, headers_redact=redact,
+                exception_cb=exc_cb)
+            if self.cloud_name == CloudNames.AWS:
+                identity = ec2.get_instance_identity(
+                    api_version, self.metadata_address,
+                    headers_cb=self._get_headers, headers_redact=redact,
+                    exception_cb=exc_cb)
+                crawled_metadata['dynamic'] = {'instance-identity': identity}
         except Exception:
             util.logexc(
                 LOG, "Failed reading from metadata address %s",
                 self.metadata_address)
-            return False
-        return True
+            return {}
+        crawled_metadata['_metadata_api_version'] = api_version
+        return crawled_metadata
+
+    def _refresh_api_token(self, seconds=AWS_TOKEN_TTL_SECONDS):
+        """Request new metadata API token.
+        @param seconds: The lifetime of the token in seconds
+
+        @return: The API token or None if unavailable.
+        """
+        if self.cloud_name != CloudNames.AWS:
+            return None
+        LOG.debug("Refreshing Ec2 metadata API token")
+        request_header = {AWS_TOKEN_REQ_HEADER: seconds}
+        token_url = '{}/{}'.format(self.metadata_address, API_TOKEN_ROUTE)
+        try:
+            response = uhelp.readurl(token_url, headers=request_header,
+                                     headers_redact=AWS_TOKEN_REDACT,
+                                     request_method="PUT")
+        except uhelp.UrlError as e:
+            LOG.warning(
+                'Unable to get API token: %s raised exception %s',
+                token_url, e)
+            return None
+        return response.contents
+
+    def _skip_or_refresh_stale_aws_token_cb(self, msg, exception):
+        """Callback will not retry on SKIP_USERDATA_CODES or if no token
+           is available."""
+        retry = ec2.skip_retry_on_codes(
+            ec2.SKIP_USERDATA_CODES, msg, exception)
+        if not retry:
+            return False  # False raises exception
+        return self._refresh_stale_aws_token_cb(msg, exception)
+
+    def _refresh_stale_aws_token_cb(self, msg, exception):
+        """Exception handler for Ec2 to refresh token if token is stale."""
+        if isinstance(exception, uhelp.UrlError) and exception.code == 401:
+            # With _api_token as None, _get_headers will _refresh_api_token.
+            LOG.debug("Clearing cached Ec2 API token due to expiry")
+            self._api_token = None
+        return True  # always retry
+
+    def _imds_exception_cb(self, msg, exception=None):
+        """Fail quickly on proper AWS if IMDSv2 rejects API token request
+
+        Guidance from Amazon is that if IMDSv2 had disabled token requests
+        by returning a 403, or cloud-init malformed requests resulting in
+        other 40X errors, we want the datasource detection to fail quickly
+        without retries as those symptoms will likely not be resolved by
+        retries.
+
+        Exceptions such as requests.ConnectionError due to IMDS being
+        temporarily unroutable or unavailable will still retry due to the
+        callsite wait_for_url.
+        """
+        if isinstance(exception, uhelp.UrlError):
+            # requests.ConnectionError will have exception.code == None
+            if exception.code and exception.code >= 400:
+                if exception.code == 403:
+                    LOG.warning('Ec2 IMDS endpoint returned a 403 error. '
+                                'HTTP endpoint is disabled. Aborting.')
+                else:
+                    LOG.warning('Fatal error while requesting '
+                                'Ec2 IMDSv2 API tokens')
+                raise exception
+
+    def _get_headers(self, url=''):
+        """Return a dict of headers for accessing a url.
+
+        If _api_token is unset on AWS, attempt to refresh the token via a PUT
+        and then return the updated token header.
+        """
+        if self.cloud_name != CloudNames.AWS:
+            return {}
+        # Request a 6 hour token if URL is API_TOKEN_ROUTE
+        request_token_header = {AWS_TOKEN_REQ_HEADER: AWS_TOKEN_TTL_SECONDS}
+        if API_TOKEN_ROUTE in url:
+            return request_token_header
+        if not self._api_token:
+            # If we don't yet have an API token, get one via a PUT against
+            # API_TOKEN_ROUTE. This _api_token may get unset by a 403 due
+            # to an invalid or expired token
+            self._api_token = self._refresh_api_token()
+            if not self._api_token:
+                return {}
+        return {AWS_TOKEN_PUT_HEADER: self._api_token}
 
 
 class DataSourceEc2Local(DataSourceEc2):
@@ -375,10 +580,10 @@ class DataSourceEc2Local(DataSourceEc2):
     perform_dhcp_setup = True  # Use dhcp before querying metadata
 
     def get_data(self):
-        supported_platforms = (Platforms.AWS,)
-        if self.cloud_platform not in supported_platforms:
+        supported_platforms = (CloudNames.AWS,)
+        if self.cloud_name not in supported_platforms:
             LOG.debug("Local Ec2 mode only supported on %s, not %s",
-                      supported_platforms, self.cloud_platform)
+                      supported_platforms, self.cloud_name)
             return False
         return super(DataSourceEc2Local, self).get_data()
 
@@ -439,20 +644,31 @@ def identify_aws(data):
     if (data['uuid'].startswith('ec2') and
             (data['uuid_source'] == 'hypervisor' or
              data['uuid'] == data['serial'])):
-            return Platforms.AWS
+        return CloudNames.AWS
 
     return None
 
 
 def identify_brightbox(data):
-    if data['serial'].endswith('brightbox.com'):
-        return Platforms.BRIGHTBOX
+    if data['serial'].endswith('.brightbox.com'):
+        return CloudNames.BRIGHTBOX
+
+
+def identify_zstack(data):
+    if data['asset_tag'].endswith('.zstack.io'):
+        return CloudNames.ZSTACK
+
+
+def identify_e24cloud(data):
+    if data['vendor'] == 'e24cloud':
+        return CloudNames.E24CLOUD
 
 
 def identify_platform():
-    # identify the platform and return an entry in Platforms.
+    # identify the platform and return an entry in CloudNames.
     data = _collect_platform_data()
-    checks = (identify_aws, identify_brightbox, lambda x: Platforms.UNKNOWN)
+    checks = (identify_aws, identify_brightbox, identify_zstack,
+              identify_e24cloud, lambda x: CloudNames.UNKNOWN)
     for checker in checks:
         try:
             result = checker(data)
@@ -470,6 +686,8 @@ def _collect_platform_data():
        uuid: system-uuid from dmi or /sys/hypervisor
        uuid_source: 'hypervisor' (/sys/hypervisor/uuid) or 'dmi'
        serial: dmi 'system-serial-number' (/sys/.../product_serial)
+       asset_tag: 'dmidecode -s chassis-asset-tag'
+       vendor: dmi 'system-manufacturer' (/sys/.../sys_vendor)
 
     On Ec2 instances experimentation is that product_serial is upper case,
     and product_uuid is lower case.  This returns lower case values for both.
@@ -492,12 +710,22 @@ def _collect_platform_data():
 
     data['serial'] = serial.lower()
 
+    asset_tag = util.read_dmi_data('chassis-asset-tag')
+    if asset_tag is None:
+        asset_tag = ''
+
+    data['asset_tag'] = asset_tag.lower()
+
+    vendor = util.read_dmi_data('system-manufacturer')
+    data['vendor'] = (vendor if vendor else '').lower()
+
     return data
 
 
-def convert_ec2_metadata_network_config(network_md, macs_to_nics=None,
-                                        fallback_nic=None):
-    """Convert ec2 metadata to network config version 1 data dict.
+def convert_ec2_metadata_network_config(
+        network_md, macs_to_nics=None, fallback_nic=None,
+        full_network_config=True):
+    """Convert ec2 metadata to network config version 2 data dict.
 
     @param: network_md: 'network' portion of EC2 metadata.
        generally formed as {"interfaces": {"macs": {}} where
@@ -507,26 +735,102 @@ def convert_ec2_metadata_network_config(network_md, macs_to_nics=None,
        not provided, get_interfaces_by_mac is called to get it from the OS.
     @param: fallback_nic: Optionally provide the primary nic interface name.
        This nic will be guaranteed to minimally have a dhcp4 configuration.
+    @param: full_network_config: Boolean set True to configure all networking
+       presented by IMDS. This includes rendering secondary IPv4 and IPv6
+       addresses on all NICs and rendering network config on secondary NICs.
+       If False, only the primary nic will be configured and only with dhcp
+       (IPv4/IPv6).
 
-    @return A dict of network config version 1 based on the metadata and macs.
+    @return A dict of network config version 2 based on the metadata and macs.
     """
-    netcfg = {'version': 1, 'config': []}
+    netcfg = {'version': 2, 'ethernets': {}}
     if not macs_to_nics:
         macs_to_nics = net.get_interfaces_by_mac()
     macs_metadata = network_md['interfaces']['macs']
-    for mac, nic_name in macs_to_nics.items():
+
+    if not full_network_config:
+        for mac, nic_name in macs_to_nics.items():
+            if nic_name == fallback_nic:
+                break
+        dev_config = {'dhcp4': True,
+                      'dhcp6': False,
+                      'match': {'macaddress': mac.lower()},
+                      'set-name': nic_name}
+        nic_metadata = macs_metadata.get(mac)
+        if nic_metadata.get('ipv6s'):  # Any IPv6 addresses configured
+            dev_config['dhcp6'] = True
+        netcfg['ethernets'][nic_name] = dev_config
+        return netcfg
+    # Apply network config for all nics and any secondary IPv4/v6 addresses
+    nic_idx = 1
+    for mac, nic_name in sorted(macs_to_nics.items()):
         nic_metadata = macs_metadata.get(mac)
         if not nic_metadata:
             continue  # Not a physical nic represented in metadata
-        nic_cfg = {'type': 'physical', 'name': nic_name, 'subnets': []}
-        nic_cfg['mac_address'] = mac
-        if (nic_name == fallback_nic or nic_metadata.get('public-ipv4s') or
-                nic_metadata.get('local-ipv4s')):
-            nic_cfg['subnets'].append({'type': 'dhcp4'})
-        if nic_metadata.get('ipv6s'):
-            nic_cfg['subnets'].append({'type': 'dhcp6'})
-        netcfg['config'].append(nic_cfg)
+        dhcp_override = {'route-metric': nic_idx * 100}
+        nic_idx += 1
+        dev_config = {'dhcp4': True, 'dhcp4-overrides': dhcp_override,
+                      'dhcp6': False,
+                      'match': {'macaddress': mac.lower()},
+                      'set-name': nic_name}
+        if nic_metadata.get('ipv6s'):  # Any IPv6 addresses configured
+            dev_config['dhcp6'] = True
+            dev_config['dhcp6-overrides'] = dhcp_override
+        dev_config['addresses'] = get_secondary_addresses(nic_metadata, mac)
+        if not dev_config['addresses']:
+            dev_config.pop('addresses')  # Since we found none configured
+        netcfg['ethernets'][nic_name] = dev_config
+    # Remove route-metric dhcp overrides if only one nic configured
+    if len(netcfg['ethernets']) == 1:
+        for nic_name in netcfg['ethernets'].keys():
+            netcfg['ethernets'][nic_name].pop('dhcp4-overrides')
+            netcfg['ethernets'][nic_name].pop('dhcp6-overrides', None)
     return netcfg
+
+
+def get_secondary_addresses(nic_metadata, mac):
+    """Parse interface-specific nic metadata and return any secondary IPs
+
+    :return: List of secondary IPv4 or IPv6 addresses to configure on the
+    interface
+    """
+    ipv4s = nic_metadata.get('local-ipv4s')
+    ipv6s = nic_metadata.get('ipv6s')
+    addresses = []
+    # In version < 2018-09-24 local_ipv4s or ipv6s is a str with one IP
+    if bool(isinstance(ipv4s, list) and len(ipv4s) > 1):
+        addresses.extend(
+            _get_secondary_addresses(
+                nic_metadata, 'subnet-ipv4-cidr-block', mac, ipv4s, '24'))
+    if bool(isinstance(ipv6s, list) and len(ipv6s) > 1):
+        addresses.extend(
+            _get_secondary_addresses(
+                nic_metadata, 'subnet-ipv6-cidr-block', mac, ipv6s, '128'))
+    return sorted(addresses)
+
+
+def _get_secondary_addresses(nic_metadata, cidr_key, mac, ips, default_prefix):
+    """Return list of IP addresses as CIDRs for secondary IPs
+
+    The CIDR prefix will be default_prefix if cidr_key is absent or not
+    parseable in nic_metadata.
+    """
+    addresses = []
+    cidr = nic_metadata.get(cidr_key)
+    prefix = default_prefix
+    if not cidr or len(cidr.split('/')) != 2:
+        ip_type = 'ipv4' if 'ipv4' in cidr_key else 'ipv6'
+        LOG.warning(
+            'Could not parse %s %s for mac %s. %s network'
+            ' config prefix defaults to /%s',
+            cidr_key, cidr, mac, ip_type, prefix)
+    else:
+        prefix = cidr.split('/')[1]
+    # We know we have > 1 ips for in metadata for this IP type
+    for ip in ips[1:]:
+        addresses.append(
+            '{ip}/{prefix}'.format(ip=ip, prefix=prefix))
+    return addresses
 
 
 # Used to match classes to dependencies
