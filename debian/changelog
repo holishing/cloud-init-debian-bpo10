@@ -93,7 +93,7 @@ cloud-init (19.2-2) unstable; urgency=medium
 
 cloud-init (19.2-1) unstable; urgency=medium
 
-  * New upstream release.
+  * New upstream release. (Closes: #931173, #936030)
   * Drop 0008-opennebula-also-exclude-epochseconds-from-changed-en.patch
     applied upstream.
   * Drop CVE-2019-0816_Filter_list_of_ssh_keys_pulled_from_fabric.patch also
