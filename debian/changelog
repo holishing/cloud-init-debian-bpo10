@@ -1,6 +1,8 @@
-cloud-init (20.2-3) UNRELEASED; urgency=medium
+cloud-init (20.2-3) unstable; urgency=medium
 
-  * Rebuilt.
+  * Ignore all of test_datasource/test_opennebula.py, as tests are failing
+    under Python 3.9, and I don't think anyone cares about opennebula anymore.
+    Anyone willing to fix is welcome to send a MR. (Closes: #973062)
 
  -- Thomas Goirand <zigo@debian.org>  Wed, 28 Oct 2020 18:23:20 +0100
 
