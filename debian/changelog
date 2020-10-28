@@ -1,3 +1,9 @@
+cloud-init (20.2-3) UNRELEASED; urgency=medium
+
+  * Rebuilt.
+
+ -- Thomas Goirand <zigo@debian.org>  Wed, 28 Oct 2020 18:23:20 +0100
+
 cloud-init (20.2-2) unstable; urgency=medium
 
   * Add missing Build-Dep on python3-pytest
