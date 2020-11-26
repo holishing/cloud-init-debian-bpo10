@@ -12,8 +12,6 @@ order to validate return responses.
 
 '''
 
-from __future__ import print_function
-
 from binascii import crc32
 import json
 import multiprocessing
@@ -34,8 +32,8 @@ from cloudinit.sources.DataSourceSmartOS import (
 from cloudinit.event import EventType
 
 from cloudinit import helpers as c_helpers
-from cloudinit.util import (
-    b64e, subp, ProcessExecutionError, which, write_file)
+from cloudinit.util import (b64e, write_file)
+from cloudinit.subp import (subp, ProcessExecutionError, which)
 
 from cloudinit.tests.helpers import (
     CiTestCase, mock, FilesystemMockingTestCase, skipIf)
@@ -669,7 +667,7 @@ class TestIdentifyFile(CiTestCase):
         with self.allow_subp(["file"]):
             self.assertEqual("text/plain", identify_file(fname))
 
-    @mock.patch(DSMOS + ".util.subp")
+    @mock.patch(DSMOS + ".subp.subp")
     def test_returns_none_on_error(self, m_subp):
         """On 'file' execution error, None should be returned."""
         m_subp.side_effect = ProcessExecutionError("FILE_FAILED", exit_code=99)

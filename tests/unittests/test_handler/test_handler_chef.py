@@ -41,7 +41,7 @@ class TestInstallChefOmnibus(HttprettyTestCase):
             httpretty.GET, cc_chef.OMNIBUS_URL, body=response, status=200)
         ret = (None, None)  # stdout, stderr but capture=False
 
-        with mock.patch("cloudinit.config.cc_chef.util.subp_blob_in_tempfile",
+        with mock.patch("cloudinit.config.cc_chef.subp_blob_in_tempfile",
                         return_value=ret) as m_subp_blob:
             cc_chef.install_chef_from_omnibus()
         # admittedly whitebox, but assuming subp_blob_in_tempfile works
@@ -52,7 +52,7 @@ class TestInstallChefOmnibus(HttprettyTestCase):
             m_subp_blob.call_args_list)
 
     @mock.patch('cloudinit.config.cc_chef.url_helper.readurl')
-    @mock.patch('cloudinit.config.cc_chef.util.subp_blob_in_tempfile')
+    @mock.patch('cloudinit.config.cc_chef.subp_blob_in_tempfile')
     def test_install_chef_from_omnibus_retries_url(self, m_subp_blob, m_rdurl):
         """install_chef_from_omnibus retries OMNIBUS_URL upon failure."""
 
@@ -81,7 +81,7 @@ class TestInstallChefOmnibus(HttprettyTestCase):
             m_subp_blob.call_args_list[0][1])
 
     @mock.patch("cloudinit.config.cc_chef.OMNIBUS_URL", OMNIBUS_URL_HTTP)
-    @mock.patch('cloudinit.config.cc_chef.util.subp_blob_in_tempfile')
+    @mock.patch('cloudinit.config.cc_chef.subp_blob_in_tempfile')
     def test_install_chef_from_omnibus_has_omnibus_version(self, m_subp_blob):
         """install_chef_from_omnibus provides version arg to OMNIBUS_URL."""
         chef_outfile = self.tmp_path('chef.out', self.new_root)
@@ -130,6 +130,7 @@ class TestChef(FilesystemMockingTestCase):
 
         # This should create a file of the format...
         # Created by cloud-init v. 0.7.6 on Sat, 11 Oct 2014 23:57:21 +0000
+        chef_license           "accept"
         log_level              :info
         ssl_verify_mode        :verify_none
         log_location           "/var/log/chef/client.log"
@@ -153,6 +154,7 @@ class TestChef(FilesystemMockingTestCase):
         util.write_file('/etc/cloud/templates/chef_client.rb.tmpl', tpl_file)
         cfg = {
             'chef': {
+                'chef_license': "accept",
                 'server_url': 'localhost',
                 'validation_name': 'bob',
                 'validation_key': "/etc/chef/vkey.pem",
