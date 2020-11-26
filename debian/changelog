@@ -1,3 +1,13 @@
+cloud-init (20.4-1) unstable; urgency=medium
+
+  * New upstream version 20.4
+  * Clarifiy comments and spelling in default cloud.cfg (Closes: #971582)
+  * d/copyright: Clean up formatting
+  * Clean up lintian overrides
+  * Suppress lintian warning about Z99-cloud-locale-test.sh
+
+ -- Noah Meyerhans <noahm@debian.org>  Wed, 25 Nov 2020 19:29:14 -0800
+
 cloud-init (20.2-3) unstable; urgency=medium
 
   * Ignore all of test_datasource/test_opennebula.py, as tests are failing
