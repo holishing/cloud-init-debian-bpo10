@@ -5,22 +5,29 @@ from cloudinit.distros import bsd_utils
 from cloudinit import helpers
 from cloudinit import log as logging
 from cloudinit import net
+from cloudinit import subp
 from cloudinit import util
+from .networking import BSDNetworking
 
 LOG = logging.getLogger(__name__)
 
 
 class BSD(distros.Distro):
+    networking_cls = BSDNetworking
     hostname_conf_fn = '/etc/rc.conf'
     rc_conf_fn = "/etc/rc.conf"
+
+    # This differs from the parent Distro class, which has -P for
+    # poweroff.
+    shutdown_options_map = {'halt': '-H', 'poweroff': '-p', 'reboot': '-r'}
 
     # Set in BSD distro subclasses
     group_add_cmd_prefix = []
     pkg_cmd_install_prefix = []
     pkg_cmd_remove_prefix = []
-    # There is no need to update the package cache on NetBSD and OpenBSD
-    # TODO neither freebsd nor netbsd handles a command 'upgrade'
+    # There is no update/upgrade on OpenBSD
     pkg_cmd_update_prefix = None
+    pkg_cmd_upgrade_prefix = None
 
     def __init__(self, name, cfg, paths):
         super().__init__(name, cfg, paths)
@@ -50,7 +57,7 @@ class BSD(distros.Distro):
         else:
             group_add_cmd = self.group_add_cmd_prefix + [name]
             try:
-                util.subp(group_add_cmd)
+                subp.subp(group_add_cmd)
                 LOG.info("Created new group %s", name)
             except Exception:
                 util.logexc(LOG, "Failed to create group %s", name)
@@ -63,7 +70,7 @@ class BSD(distros.Distro):
                             "; user does not exist.", member, name)
                 continue
             try:
-                util.subp(self._get_add_member_to_group_cmd(member, name))
+                subp.subp(self._get_add_member_to_group_cmd(member, name))
                 LOG.info("Added user '%s' to group '%s'", member, name)
             except Exception:
                 util.logexc(LOG, "Failed to add user '%s' to group '%s'",
@@ -97,6 +104,10 @@ class BSD(distros.Distro):
             if not self.pkg_cmd_update_prefix:
                 return
             cmd = self.pkg_cmd_update_prefix
+        elif command == 'upgrade':
+            if not self.pkg_cmd_upgrade_prefix:
+                return
+            cmd = self.pkg_cmd_upgrade_prefix
 
         if args and isinstance(args, str):
             cmd.append(args)
@@ -107,7 +118,7 @@ class BSD(distros.Distro):
         cmd.extend(pkglist)
 
         # Allow the output of this to flow outwards (ie not be captured)
-        util.subp(cmd, env=self._get_pkg_cmd_environ(), capture=False)
+        subp.subp(cmd, env=self._get_pkg_cmd_environ(), capture=False)
 
     def _write_network_config(self, netconfig):
         return self._supported_write_network_config(netconfig)

@@ -14,8 +14,10 @@ import re
 import time
 from xml.dom import minidom
 
+from cloudinit import dmi
 from cloudinit import log as logging
 from cloudinit import sources
+from cloudinit import subp
 from cloudinit import util
 from cloudinit.sources.helpers.vmware.imc.config \
     import Config
@@ -72,6 +74,7 @@ class DataSourceOVF(sources.DataSource):
         found = []
         md = {}
         ud = ""
+        vd = ""
         vmwareImcConfigFilePath = None
         nicspath = None
 
@@ -81,7 +84,7 @@ class DataSourceOVF(sources.DataSource):
 
         (seedfile, contents) = get_ovf_env(self.paths.seed_dir)
 
-        system_type = util.read_dmi_data("system-product-name")
+        system_type = dmi.read_dmi_data("system-product-name")
         if system_type is None:
             LOG.debug("No system-product-name found")
 
@@ -151,14 +154,25 @@ class DataSourceOVF(sources.DataSource):
                     product_marker, os.path.join(self.paths.cloud_dir, 'data'))
                 special_customization = product_marker and not hasmarkerfile
                 customscript = self._vmware_cust_conf.custom_script_name
-                custScriptConfig = get_tools_config(
-                    CONFGROUPNAME_GUESTCUSTOMIZATION,
-                    GUESTCUSTOMIZATION_ENABLE_CUST_SCRIPTS,
-                    "false")
-                if custScriptConfig.lower() != "true":
-                    # Update the customization status if there is a
-                    # custom script is disabled
-                    if special_customization and customscript:
+
+                # In case there is a custom script, check whether VMware
+                # Tools configuration allow the custom script to run.
+                if special_customization and customscript:
+                    defVal = "false"
+                    if self._vmware_cust_conf.default_run_post_script:
+                        LOG.debug(
+                            "Set default value to true due to"
+                            " customization configuration."
+                        )
+                        defVal = "true"
+
+                    custScriptConfig = get_tools_config(
+                        CONFGROUPNAME_GUESTCUSTOMIZATION,
+                        GUESTCUSTOMIZATION_ENABLE_CUST_SCRIPTS,
+                        defVal)
+                    if custScriptConfig.lower() != "true":
+                        # Update the customization status if custom script
+                        # is disabled
                         msg = "Custom script is disabled by VM Administrator"
                         LOG.debug(msg)
                         set_customization_status(
@@ -292,7 +306,7 @@ class DataSourceOVF(sources.DataSource):
                           seedfrom, self)
                 return False
 
-            (md_seed, ud) = util.read_seeded(seedfrom, timeout=None)
+            (md_seed, ud, vd) = util.read_seeded(seedfrom, timeout=None)
             LOG.debug("Using seeded cache data from %s", seedfrom)
 
             md = util.mergemanydict([md, md_seed])
@@ -304,11 +318,12 @@ class DataSourceOVF(sources.DataSource):
         self.seed = ",".join(found)
         self.metadata = md
         self.userdata_raw = ud
+        self.vendordata_raw = vd
         self.cfg = cfg
         return True
 
     def _get_subplatform(self):
-        system_type = util.read_dmi_data("system-product-name").lower()
+        system_type = dmi.read_dmi_data("system-product-name").lower()
         if system_type == 'vmware':
             return 'vmware (%s)' % self.seed
         return 'ovf (%s)' % self.seed
@@ -536,15 +551,15 @@ def transport_iso9660(require_iso=True):
 def transport_vmware_guestinfo():
     rpctool = "vmware-rpctool"
     not_found = None
-    if not util.which(rpctool):
+    if not subp.which(rpctool):
         return not_found
     cmd = [rpctool, "info-get guestinfo.ovfEnv"]
     try:
-        out, _err = util.subp(cmd)
+        out, _err = subp.subp(cmd)
         if out:
             return out
         LOG.debug("cmd %s exited 0 with empty stdout: %s", cmd, out)
-    except util.ProcessExecutionError as e:
+    except subp.ProcessExecutionError as e:
         if e.exit_code != 1:
             LOG.warning("%s exited with code %d", rpctool, e.exit_code)
             LOG.debug(e)
