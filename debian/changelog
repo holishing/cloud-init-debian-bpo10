@@ -1,3 +1,10 @@
+cloud-init (20.4.1-1) unstable; urgency=medium
+
+  * d/watch: switch upstream to github
+  * New upstream version 20.4.1
+
+ -- Noah Meyerhans <noahm@debian.org>  Tue, 19 Jan 2021 10:27:39 -0800
+
 cloud-init (20.4-1) unstable; urgency=medium
 
   * New upstream version 20.4
