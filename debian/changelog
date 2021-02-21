@@ -1,3 +1,10 @@
+cloud-init (20.4.1-1~custom+sean1) unstable; urgency=medium
+
+  * tests are failing only on python3.9, assume python3.7 are not affected and
+    pytest in debian buster does not support --ignore-glob option
+
+ -- Sean Ho <holishing@ccns.ncku.edu.tw>  Sun, 21 Feb 2021 10:39:37 +0000
+
 cloud-init (20.4.1-1) unstable; urgency=medium
 
   * d/watch: switch upstream to github
